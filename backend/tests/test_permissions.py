@@ -157,3 +157,12 @@ def test_demo_login_is_development_only(api, ctx, monkeypatch):
     monkeypatch.setattr(s, "demo_login_show_samples", True)
     monkeypatch.setattr(s, "demo_login_enabled", False)
     assert c.post("/api/auth/demo-login", json={"user_id": ctx["users"]["qc"]}).status_code == 404
+
+
+def test_hosted_postgres_urls_use_the_psycopg_driver():
+    from app.config import Settings
+
+    assert Settings(database_url="postgres://u:p@h:5432/d").database_url == "postgresql+psycopg://u:p@h:5432/d"
+    assert Settings(database_url="postgresql://u:p@h/d").database_url == "postgresql+psycopg://u:p@h/d"
+    assert Settings(database_url="postgresql+psycopg://u:p@h/d").database_url == "postgresql+psycopg://u:p@h/d"
+    assert Settings(database_url="sqlite:///./x.db").database_url == "sqlite:///./x.db"

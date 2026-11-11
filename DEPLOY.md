@@ -9,7 +9,7 @@ website. The backend must run somewhere else, and the website talks to it throug
   are private. A static host publishes every file you give it.
 * Upload **only** `frontend/dist` (5 files: `index.html`, `_redirects`, `favicon.svg`, `assets/…`). Run `npm run build` in `frontend` first.
 * Secrets go into the host's *environment variables / secret store*, never into files in the upload.
-* After every deploy, open `https://YOUR-SITE/backend/data/app.db` and `https://YOUR-SITE/backend/secrets/drive-key.json`: both must be 404.
+* After every deploy, open `https://YOUR-SITE/backend/data/app.db` and `https://YOUR-SITE/backend/secrets/drive-key.json`: neither may download a file. A 404, or the website's own page (single-page apps answer unknown paths with `index.html`), is fine; a JSON/database download is not.
 
 ## 1. Recommended: one container for website + API
 
@@ -63,7 +63,7 @@ persistent disk, no background threads for the Drive sync and QC, and short time
    ```json
    { "source": "/api/:path*", "destination": "https://YOUR-BACKEND-HOST/api/:path*" }
    ```
-4. Check as in section 0: the two private URLs must be 404, `/app/rules` must not be 404 after login.
+4. Check as in section 0: the two private URLs must not download anything, and `/app/rules` must open (not 404) after login.
 
 CLI alternative (from the `frontend` folder only): `npx vercel login`, then `npx vercel --prod`.
 

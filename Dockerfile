@@ -16,8 +16,9 @@ RUN pip install -r requirements.txt
 COPY backend/ ./
 COPY --from=web /web/dist /app/frontend/dist
 RUN useradd -m app && mkdir -p /data && chown -R app /data /app
-USER app
 ENV ENV=production STORAGE_ROOT=/data/storage
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s CMD curl -fs http://localhost:8000/api/health || exit 1
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+HEALTHCHECK --interval=30s --timeout=5s CMD curl -fs http://localhost:${PORT:-8000}/api/health || exit 1
+# Hosts mount the persistent disk owned by root: fix its ownership first, then run the app as the unprivileged user.
+# The port comes from $PORT (Render, Railway, ...) and defaults to 8000; --forwarded-allow-ips lets the app see https behind the host's proxy.
+CMD ["sh", "-c", "chown -R app /data; exec runuser -u app -- sh -c 'alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*'"]

@@ -1,0 +1,53 @@
+# Render Blueprint: one Docker web service (API + built website) + PostgreSQL + a persistent disk.
+# Render dashboard -> New -> Blueprint -> pick this repository. Values marked `sync: false` are asked for once and never stored in Git.
+# Plan names / prices change: check them in the dashboard. A paid web plan is needed because the Drive auto-sync and QC run in the
+# background (free services go to sleep) and because only paid services can have a persistent disk.
+services:
+  - type: web
+    name: mystery-shopping-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: msai-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: msai-db
+          property: connectionString
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: STORAGE_ROOT
+        value: /data/storage
+      - key: QC_REPORTS_DIR
+        value: /data/qc-reports
+      - key: IMPORT_LOCAL_ROOT
+        value: /data/imports
+      - key: DRIVE_AUTO_SYNC
+        value: "true"
+      - key: DRIVE_SYNC_INTERVAL_MINUTES
+        value: "2"
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        value: ISN
+
+databases:
+  - name: msai-db
+    plan: basic-256mb
+    databaseName: msai
+    user: msai

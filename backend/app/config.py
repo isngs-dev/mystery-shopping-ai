@@ -3,7 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     # Jobs
     job_workers: int = 2
     jobs_inline: bool = False  # run jobs synchronously (tests)
+
+    @field_validator("database_url")
+    @classmethod
+    def _driver(cls, v: str) -> str:
+        """Hosts (Render, Railway, Heroku) hand out postgres:// or postgresql:// URLs; this app uses the psycopg 3 driver."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix):]
+        return v
 
     @property
     def demo_login_active(self) -> bool:
