@@ -1,0 +1,13 @@
+# Nothing private or local may end up inside an image
+.git
+**/.env
+**/.env.*
+!**/.env.example
+backend/.venv
+backend/data
+backend/secrets
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+frontend/dist
+samples

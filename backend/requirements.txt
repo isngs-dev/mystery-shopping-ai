@@ -1,0 +1,22 @@
+# Runtime dependencies (pinned to the versions the test-suite passes against)
+alembic==1.20.1
+anthropic==2.3.0
+bcrypt==5.0.0
+email-validator==2.3.0
+fastapi==0.162.0
+google-auth==2.62.0
+httpx==0.28.1
+openpyxl==3.1.5
+pillow==13.0.0
+psycopg-binary==3.3.6
+psycopg==3.3.6
+pydantic-settings==2.16.1
+pydantic==2.14.1
+PyJWT==2.15.1
+pymupdf==2.0
+pyspellchecker==0.9.1
+pytesseract==0.3.13
+python-multipart==0.0.32
+requests==2.34.2
+SQLAlchemy==2.1.6
+uvicorn==0.54.0
