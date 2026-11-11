@@ -51,6 +51,22 @@ Scanned PDFs need Tesseract; the Dockerfile installs it.
 
 Without step 1–2 the site shows the pages but nothing can log in, because there is no backend behind `/api`.
 
+## 2b. Optional: Vercel for the website, backend elsewhere
+
+Same idea as Netlify: Vercel hosts only the website (`frontend`). The FastAPI backend cannot run on Vercel (serverless functions have no
+persistent disk, no background threads for the Drive sync and QC, and short time limits) — host it as in section 1.
+
+1. Vercel dashboard → *Add New… → Project* → import the GitHub repository `isngs-dev/mystery-shopping-ai`.
+2. **Root Directory: `frontend`** (important — this keeps `backend/data` and `backend/secrets` out of the build). Framework: Vite.
+   Build command and output are already set in `frontend/vercel.json`.
+3. Before the first real use, add the API rule **above** the existing one in `frontend/vercel.json`, commit and push (Vercel redeploys):
+   ```json
+   { "source": "/api/:path*", "destination": "https://YOUR-BACKEND-HOST/api/:path*" }
+   ```
+4. Check as in section 0: the two private URLs must be 404, `/app/rules` must not be 404 after login.
+
+CLI alternative (from the `frontend` folder only): `npx vercel login`, then `npx vercel --prod`.
+
 ## 3. After the accidental upload
 
 * Delete that Netlify site, create a new Drive service-account key (delete the old one in Google Cloud → IAM → Service accounts → Keys),
