@@ -189,6 +189,14 @@ export default function FormDetail() {
         </div>
       </div>
       {run && can('qc.view') && role !== 'editor' && f.raw_document_id && <div className="mt-4"><QCWorkspace formId={id} embedded /></div>}
+      {!run && can('qc.view') && role !== 'editor' && f.raw_document_id && (
+        <div className="card mt-4 p-4">
+          <h2 className="font-bold">QC workspace</h2>
+          {f.edited_versions > 0
+            ? <><p className="mt-1 text-sm text-muted">QC has not run on this form yet. It starts by itself with the next Drive sync (every minute or two); you can also start it now.</p>
+              {can('qc.run') && <button className="btn-primary mt-3" onClick={() => act(() => api.post(`/api/forms/${id}/qc/run`), 'QC started')}>Run QC now</button>}</>
+            : <p className="mt-1 text-sm text-muted">Waiting for the edited PDF ({f.form_code}_2.pdf). QC starts as soon as it arrives.</p>}
+        </div>)}
       <ReasonModal open={reason === 'block'} onClose={() => setReason(null)} title="Block form" label="What input is missing or invalid?" danger onSubmit={(r) => { setReason(null); act(() => api.post(`/api/forms/${id}/status`, { action: 'block', reason: r }), 'Form blocked') }} />
       <ReasonModal open={reason === 'escalate'} onClose={() => setReason(null)} title="Escalate disputed case" label="Why does this need manual review?" onSubmit={(r) => { setReason(null); act(() => api.post(`/api/forms/${id}/escalate`, { reason: r }), 'Escalated for manual review') }} />
     </div>

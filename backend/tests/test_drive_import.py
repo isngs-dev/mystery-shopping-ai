@@ -78,15 +78,12 @@ def imported(api, ctx):
     assert r.status_code == 202, r.text
     job = sa.get(f"/api/integrations/drive/jobs/{r.json()['id']}").json()
     assert job["status"] == "completed", job
-    # QC only starts for projects handed to a QC lead: the coordinator assigns both, then the next sync picks up what was waiting
+    # QC has already run on everything; assigning a project only decides who reviews it (and gives that QC lead access)
     db = SessionLocal()
     pids = [p.id for p in db.query(Project).filter(Project.name.in_(["Valley Bank_Geeta", "HOU_Geeta"]))]
     db.close()
     for pid in pids:
         assert sa.put(f"/api/qc/projects/{pid}/reviewer", json={"reviewer_id": ctx["users"]["qc"]}).status_code == 200
-    r2 = post_zip(sa, ZIP_BYTES['b'])
-    job["second"] = sa.get(f"/api/integrations/drive/jobs/{r2.json()['id']}").json()
-    assert job["second"]["status"] == "completed", job["second"]
     return sa, job
 
 
@@ -94,8 +91,7 @@ def test_zip_import_builds_hierarchy_runs_pipeline_and_flags_problems(imported):
     sa, job = imported
     st = job["stats"]
     assert st["clients_created"] == 2 and st["projects_created"] == 2
-    assert st["raw_imported"] == 9 and st["edited_imported"] == 5 and st["qc_waiting_assignment"] == 5 and "qc_runs" not in st     # nothing is analysed before assignment
-    assert job["second"]["stats"]["ai_edited"] == 4 and job["second"]["stats"].get("raw_imported", 0) == 0                  # after assignment: AI edit of RAW-only forms + QC
+    assert st["raw_imported"] == 9 and st["edited_imported"] == 5 and st["qc_runs"] == 5 and st["ai_edited"] == 4          # QC never waits for an assignment
     assert st["missing_raw"] == 1 and st["naming_errors"] == 1 and st["unmapped_suffix_files"] == 1
     assert st["tracker_rows"] == 2                                              # credentials + reference rows were not imported
     assert st["rules_submitted"] == 15                                         # only checklist items that are on the QC error table (+ 2 page-furniture profiles)

@@ -127,7 +127,7 @@ def test_new_and_changed_files_flow_in_automatically(api, ctx, drive):
     assert st["enabled"] and st["last_result"]["stats"]["already_imported"] >= 4 and st["running_job_id"] is None
 
 
-def test_forms_of_an_unassigned_project_wait_until_a_qc_lead_is_assigned(api, ctx, drive):
+def test_forms_are_analysed_before_the_project_is_assigned(api, ctx, drive):
     db = SessionLocal()
     db.query(ProjectReviewer).delete()                                      # the coordinator has not handed the project over yet
     db.commit()
@@ -136,20 +136,35 @@ def test_forms_of_an_unassigned_project_wait_until_a_qc_lead_is_assigned(api, ct
     sa = api("manager")
     enable(sa)
     j1 = job(drive_sync.tick(utcnow()))
-    assert j1["stats"]["raw_imported"] == 3 and j1["stats"]["edited_imported"] == 2
-    assert j1["stats"].get("qc_runs", 0) == 0 and j1["stats"]["qc_waiting_assignment"] == 2           # synced, not analysed yet
+    assert j1["stats"]["raw_imported"] == 3 and j1["stats"]["edited_imported"] == 2 and j1["stats"]["qc_runs"] == 2       # QC does not wait
     db = SessionLocal()
-    assert db.query(QCRun).count() == 0 and all(f.assigned_reviewer_id is None for f in db.scalars(select(Form)))
+    assert db.query(QCRun).count() == 2 and all(f.assigned_reviewer_id is None for f in db.scalars(select(Form)))
     db.close()
     r = sa.put(f"/api/qc/projects/{pid}/reviewer", json={"reviewer_id": ctx["users"]["qc"]})              # the coordinator assigns the project
-    assert r.status_code == 200 and r.json()["analysis"]["queued"] == 2
+    assert r.status_code == 200 and r.json()["analysis"]["queued"] == 0 and r.json()["analysis"]["already_done"] == 2
     db = SessionLocal()
-    assert db.query(QCRun).count() == 2 and all(f.assigned_reviewer_id == ctx["users"]["qc"] for f in db.scalars(select(Form)))
+    assert all(f.assigned_reviewer_id == ctx["users"]["qc"] for f in db.scalars(select(Form)))
     db.close()
-    drive("9910005_1.pdf", "9910005", RAW_N)                                # later forms of the assigned project are analysed on arrival
-    drive("9910005_2.pdf", "9910005", ED_N)
-    j2 = job(drive_sync.tick(utcnow() + timedelta(minutes=6)))
-    assert j2["stats"]["qc_runs"] == 1 and j2["stats"].get("qc_waiting_assignment", 0) == 0
+
+
+def test_forms_without_any_analysis_are_caught_up_by_the_next_sync(api, ctx, drive):
+    enable(api("manager"))
+    t0 = utcnow()
+    assert job(drive_sync.tick(t0))["stats"]["qc_runs"] == 2
+    db = SessionLocal()
+    f1 = db.scalars(select(Form).where(Form.form_code == "9910001")).one()
+    for r in db.scalars(select(QCRun).where(QCRun.form_id == f1.id)).all():          # e.g. a form synced while QC was switched off for it
+        for f in r.findings:
+            db.delete(f)
+        db.delete(r)
+    db.commit()
+    f1_id = f1.id
+    db.close()
+    j = job(drive_sync.tick(t0 + timedelta(minutes=6)))
+    assert j["stats"]["qc_runs"] == 1
+    db = SessionLocal()
+    assert db.query(QCRun).filter(QCRun.form_id == f1_id).count() == 1
+    db.close()
 
 
 def test_missing_edited_file_waits_then_ai_edits_and_a_human_file_still_wins(api, ctx, drive):

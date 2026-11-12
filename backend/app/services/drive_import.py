@@ -174,6 +174,35 @@ def _restore_missing_files(db: Session, source: Source, rep: Reporter, storage) 
 
 
 RETRY_PER_CYCLE = 25
+
+
+def _catch_up_qc(db: Session, user: User, opts: dict, rep: Reporter) -> None:
+    """Every form that has a RAW and an edited PDF but no QC analysis yet gets one (e.g. forms synced before QC could run for them)."""
+    if not opts.get("run_qc", True):
+        return
+    from .project_qc import SKIP_STATES
+
+    has_run = select(QCRun.id).where(QCRun.form_id == Form.id).exists()
+    forms = db.execute(select(Form).where(~has_run, Form.status.not_in(list(SKIP_STATES))).order_by(Form.id).limit(RETRY_PER_CYCLE * 4)).scalars().all()
+    n = 0
+    for form in forms:
+        if n >= RETRY_PER_CYCLE:
+            break
+        edited = workflow.latest_edited(form)
+        if not edited or not any(d.kind == "raw" for d in form.documents):
+            continue
+        try:
+            run = pipeline.create_run(db, form, edited, user)
+            pipeline.execute_run(db, run.id)
+            rep.stats["qc_runs"] += 1
+            rep.form_ids.append(form.id)
+            n += 1
+        except Exception as exc:  # noqa: BLE001
+            rep.stats["qc_errors"] += 1
+            rep.say(f"{form.form_code}: QC could not run ({exc})")
+        rep.flush()
+    if n:
+        rep.say(f"QC ran for {n} form(s) that had no analysis yet")
 RETRYABLE_ERRORS = ("%No such file or directory%", "%missing from storage%", "Interrupted by a server restart%")
 
 
@@ -192,7 +221,7 @@ def _retry_lost_file_failures(db: Session, user: User, opts: dict, rep: Reporter
         form = db.get(Form, run.form_id)
         edited = workflow.latest_edited(form) if form else None
         current = workflow.current_run(db, form) if form else None
-        if not form or not edited or current is None or current.id != run.id or db.get(ProjectReviewer, form.project_id) is None:
+        if not form or not edited or current is None or current.id != run.id:
             continue
         try:
             new = pipeline.create_run(db, form, edited, user)
@@ -259,6 +288,7 @@ def import_tree(db: Session, job: ImportJob, source: Source, user: User) -> None
                 break
     _finish_pass2(db, user, restored, opts, rep)           # QC again for the forms whose lost PDFs were just restored
     _retry_lost_file_failures(db, user, opts, rep)         # ... and for forms whose earlier QC failed only because a PDF was missing
+    _catch_up_qc(db, user, opts, rep)                      # ... and for any complete pair that never got a QC analysis
     _ai_edit_stale(db, rep, opts)
     try:
         n_sheet = media.reconcile_sheet_links(db)
@@ -417,9 +447,7 @@ def _finish_pass2(db: Session, user: User, pending: list, opts: dict, rep: Repor
     for form, edited in pending:
         try:
             db.refresh(form)
-            if opts.get("run_qc", True) and db.get(ProjectReviewer, form.project_id) is None:
-                rep.stats["qc_waiting_assignment"] += 1        # QC starts the moment a coordinator hands the project to a QC lead
-            elif opts.get("run_qc", True):
+            if opts.get("run_qc", True):                        # QC never waits for an assignment: assigning only decides who reviews
                 run = pipeline.create_run(db, form, edited, user)
                 pipeline.execute_run(db, run.id)
                 rep.stats["qc_runs"] += 1
@@ -442,8 +470,6 @@ def _ai_edit_stale(db: Session, rep: Reporter, opts: dict) -> None:
         form, raw_doc = db.get(Form, row.form_id), db.get(Document, row.document_id)
         if not form or not raw_doc or form.status != "pending" or any(d.kind == "edited" for d in form.documents) or raw_doc.uploaded_at > cutoff:
             continue
-        if db.get(ProjectReviewer, form.project_id) is None:
-            continue            # only projects that were handed to a QC lead are processed
         if db.execute(select(AutoEdit.id).where(AutoEdit.form_id == form.id)).first():
             continue    # already tried; failed attempts are not retried automatically
         try:
