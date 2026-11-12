@@ -109,6 +109,7 @@ export default function Repository() {
   const people = useQuery({ queryKey: ['dir', 'assign-editors'], queryFn: () => api.get<any[]>('/api/users/directory?roles=qc_reviewer,manager&for_project_assignment=true'), enabled: canAssign })
   const [pick, setPick] = useState<Record<number, string>>({})
   const reviewerOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o.reviewer]))
+  const suggestedOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o.suggested_reviewer]))     // the person the Drive folder name points to ("Orlando_Devansh")
   const assign = useMutation({
     mutationFn: (v: { id: number; name: string; rid: number }) => api.put<any>(`/api/qc/projects/${v.id}/reviewer`, { reviewer_id: v.rid }),
     onSuccess: (r, v) => {
@@ -158,6 +159,8 @@ export default function Repository() {
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{c.projects.map((p: any) => {
                     const current = reviewerOf.get(p.id)
                     const options = (people.data || []).filter((u) => u.id !== session?.user.id || u.id === current?.id)
+                    const hint = !current ? suggestedOf.get(p.id) : null
+                    const value = pick[p.id] ?? (hint && options.some((u) => u.id === hint.id) ? String(hint.id) : '')       // pre-selected, never assigned automatically
                     return (
                     <div key={p.id} className="card flex flex-col gap-3 p-4 transition hover:border-brand/60 hover:shadow-glow">
                       <button onClick={() => { setF({ ...f, project_id: String(p.id), client_id: '' }); setOffset(0) }} className="flex items-center gap-3 text-left" aria-label={`Open ${p.name}`}>
@@ -167,13 +170,13 @@ export default function Repository() {
                       </button>
                       {canAssign && (
                         <div className="border-t pt-3 text-xs">
-                          <p className="mb-1.5 text-muted">Editor: {current ? <b className="text-ink">{current.name}</b> : <span className="font-semibold text-warn">not assigned</span>}</p>
+                          <p className="mb-1.5 text-muted">Editor: {current ? <b className="text-ink">{current.name}</b> : <span className="font-semibold text-warn">not assigned</span>}{hint && <span className="ml-1">· folder name suggests {hint.name}</span>}</p>
                           <div className="flex gap-2">
-                            <select className="input !py-1.5 text-xs" value={pick[p.id] ?? ''} onChange={(e) => setPick({ ...pick, [p.id]: e.target.value })} aria-label={`Assign ${p.name} to an editor`}>
+                            <select className="input !py-1.5 text-xs" value={value} onChange={(e) => setPick({ ...pick, [p.id]: e.target.value })} aria-label={`Assign ${p.name} to an editor`}>
                               <option value="">{current ? 'Change editor…' : 'Assign to editor…'}</option>
                               {options.map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === current?.id ? ' (current)' : ''}</option>)}
                             </select>
-                            <button className="btn-primary !px-3 !py-1.5 text-xs" disabled={!pick[p.id] || assign.isPending} onClick={() => assign.mutate({ id: p.id, name: p.name, rid: Number(pick[p.id]) })}>Assign</button>
+                            <button className="btn-primary !px-3 !py-1.5 text-xs" disabled={!value || assign.isPending} onClick={() => assign.mutate({ id: p.id, name: p.name, rid: Number(value) })}>Assign</button>
                           </div>
                         </div>)}
                     </div>)})}</div>
