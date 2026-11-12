@@ -100,9 +100,24 @@ function UploadModal({ open, onClose, projects }: { open: boolean; onClose: () =
 }
 
 export default function Repository() {
-  const { can } = useAuth()
+  const { can, session } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
+  // hand a whole project to an editor (QC lead) straight from its folder card
+  const canAssign = can('projects.assign_reviewer')
+  const overview = useQuery({ queryKey: ['qc-projects', true], queryFn: () => api.get<any[]>('/api/qc/projects'), enabled: canAssign, refetchInterval: 15000 })
+  const people = useQuery({ queryKey: ['dir', 'assign-editors'], queryFn: () => api.get<any[]>('/api/users/directory?roles=qc_reviewer,manager&for_project_assignment=true'), enabled: canAssign })
+  const [pick, setPick] = useState<Record<number, string>>({})
+  const reviewerOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o.reviewer]))
+  const assign = useMutation({
+    mutationFn: (v: { id: number; name: string; rid: number }) => api.put<any>(`/api/qc/projects/${v.id}/reviewer`, { reviewer_id: v.rid }),
+    onSuccess: (r, v) => {
+      toast('ok', `${r.reviewer?.name} now has ${v.name}: ${r.forms} form(s), QC started on ${r.analysis?.queued ?? 0}${r.conflicts?.length ? `, ${r.conflicts.length} skipped (they edited those)` : ''}`)
+      setPick((p) => ({ ...p, [v.id]: '' }))
+      qc.invalidateQueries({ queryKey: ['qc-projects'] }); qc.invalidateQueries({ queryKey: ['queue'] }); qc.invalidateQueries({ queryKey: ['repo-forms'] })
+    },
+    onError: (e: any) => toast('error', e.message),
+  })
   const [tab, setTab] = useState<'docs' | 'exceptions'>('docs')
   const [upload, setUpload] = useState(false)
   const [f, setF] = useState({ q: '', project_id: '', client_id: '', status: '', pair: '', has_version: '' })
@@ -140,12 +155,28 @@ export default function Repository() {
               <div className="space-y-5">{clients.map((c) => (
                 <section key={c.id} aria-label={c.name}>
                   <h2 className="mb-2 flex items-center gap-2 text-sm font-bold"><Folder size={16} className="text-brand" /> {c.name} <Badge t="muted">{c.projects.length} project{c.projects.length === 1 ? '' : 's'}</Badge></h2>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{c.projects.map((p: any) => (
-                    <button key={p.id} onClick={() => { setF({ ...f, project_id: String(p.id), client_id: '' }); setOffset(0) }} className="card flex items-center gap-3 p-4 text-left transition hover:border-brand/60 hover:shadow-glow">
-                      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand/15 text-brand"><FolderOpen size={22} /></span>
-                      <span className="min-w-0"><b className="block truncate">{p.name}</b><span className="text-xs text-muted">{p.forms} form{p.forms === 1 ? '' : 's'}</span></span>
-                      <ChevronRight size={16} className="ml-auto shrink-0 text-muted" />
-                    </button>))}</div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{c.projects.map((p: any) => {
+                    const current = reviewerOf.get(p.id)
+                    const options = (people.data || []).filter((u) => u.id !== session?.user.id || u.id === current?.id)
+                    return (
+                    <div key={p.id} className="card flex flex-col gap-3 p-4 transition hover:border-brand/60 hover:shadow-glow">
+                      <button onClick={() => { setF({ ...f, project_id: String(p.id), client_id: '' }); setOffset(0) }} className="flex items-center gap-3 text-left" aria-label={`Open ${p.name}`}>
+                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand/15 text-brand"><FolderOpen size={22} /></span>
+                        <span className="min-w-0"><b className="block truncate">{p.name}</b><span className="text-xs text-muted">{p.forms} form{p.forms === 1 ? '' : 's'}</span></span>
+                        <ChevronRight size={16} className="ml-auto shrink-0 text-muted" />
+                      </button>
+                      {canAssign && (
+                        <div className="border-t pt-3 text-xs">
+                          <p className="mb-1.5 text-muted">Editor: {current ? <b className="text-ink">{current.name}</b> : <span className="font-semibold text-warn">not assigned</span>}</p>
+                          <div className="flex gap-2">
+                            <select className="input !py-1.5 text-xs" value={pick[p.id] ?? ''} onChange={(e) => setPick({ ...pick, [p.id]: e.target.value })} aria-label={`Assign ${p.name} to an editor`}>
+                              <option value="">{current ? 'Change editor…' : 'Assign to editor…'}</option>
+                              {options.map((u) => <option key={u.id} value={u.id}>{u.name}{u.id === current?.id ? ' (current)' : ''}</option>)}
+                            </select>
+                            <button className="btn-primary !px-3 !py-1.5 text-xs" disabled={!pick[p.id] || assign.isPending} onClick={() => assign.mutate({ id: p.id, name: p.name, rid: Number(pick[p.id]) })}>Assign</button>
+                          </div>
+                        </div>)}
+                    </div>)})}</div>
                 </section>))}</div>
             )}
           </div>
