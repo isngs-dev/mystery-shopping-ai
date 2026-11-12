@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     job_workers: int = 2
     jobs_inline: bool = False  # run jobs synchronously (tests)
 
+    @field_validator("google_drive_folder_id")
+    @classmethod
+    def _folder_id(cls, v: str | None) -> str | None:
+        """A pasted Drive link works as well as the bare folder ID."""
+        if not v:
+            return v
+        import re
+
+        m = re.search(r"/folders/([A-Za-z0-9_-]+)", v) or re.search(r"[?&]id=([A-Za-z0-9_-]+)", v)
+        return m.group(1) if m else v.strip()
+
     @field_validator("database_url")
     @classmethod
     def _driver(cls, v: str) -> str:

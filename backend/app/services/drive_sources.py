@@ -9,6 +9,7 @@ Nothing here writes to Drive.
 from __future__ import annotations
 
 import json
+import re
 import time
 import zipfile
 from abc import ABC, abstractmethod
@@ -144,11 +145,19 @@ EXPORTS = {"application/vnd.google-apps.document": "application/vnd.openxmlforma
            "application/vnd.google-apps.spreadsheet": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
 
+def drive_folder_id(text: str | None) -> str:
+    """The folder ID from whatever was pasted: the bare ID or a Drive link such as https://drive.google.com/drive/u/0/folders/<ID>?usp=sharing."""
+    s = (text or "").strip()
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", s) or re.search(r"[?&]id=([A-Za-z0-9_-]+)", s)
+    return m.group(1) if m else s
+
+
 class GoogleDriveSource(Source):
     kind = "google_drive"
     API = "https://www.googleapis.com/drive/v3"
 
     def __init__(self, folder_id: str, token_provider=None, client: httpx.Client | None = None):
+        folder_id = drive_folder_id(folder_id)
         self.folder_id = folder_id
         self.label = f"Google Drive folder {folder_id}"
         self.key = folder_id

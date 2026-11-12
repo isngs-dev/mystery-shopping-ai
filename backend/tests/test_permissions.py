@@ -166,3 +166,14 @@ def test_hosted_postgres_urls_use_the_psycopg_driver():
     assert Settings(database_url="postgresql://u:p@h/d").database_url == "postgresql+psycopg://u:p@h/d"
     assert Settings(database_url="postgresql+psycopg://u:p@h/d").database_url == "postgresql+psycopg://u:p@h/d"
     assert Settings(database_url="sqlite:///./x.db").database_url == "sqlite:///./x.db"
+
+
+def test_drive_folder_links_are_reduced_to_the_folder_id():
+    from app.config import Settings
+    from app.services.drive_sources import drive_folder_id
+
+    link = "https://drive.google.com/drive/u/0/folders/1AbC_dEf-9?usp=sharing"
+    assert drive_folder_id(link) == "1AbC_dEf-9" and drive_folder_id("1AbC_dEf-9") == "1AbC_dEf-9" and drive_folder_id(" 1AbC ") == "1AbC"
+    assert drive_folder_id("https://drive.google.com/open?id=1AbC_dEf-9") == "1AbC_dEf-9"
+    assert Settings(google_drive_folder_id=link).google_drive_folder_id == "1AbC_dEf-9"
+    assert Settings(google_drive_folder_id=None).google_drive_folder_id is None
