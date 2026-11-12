@@ -17,12 +17,12 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..audit import audit
 from ..db import SessionLocal, utcnow
-from ..models import AutoEdit, Client, Document, DriveFile, ExceptionItem, Form, ImportJob, Notification, Project, ProjectReviewer, TrackerEntry, User, UserProjectAccess
+from ..models import AutoEdit, Client, Document, DriveFile, ExceptionItem, Form, ImportJob, Notification, Project, ProjectReviewer, QCRun, TrackerEntry, User, UserProjectAccess
 from ..storage import get_storage, safe_segment
 from . import auto_editor, media, pipeline, qc_reports, repository, rules_pack, workflow
 from .drive_sources import LocalSource, Node, Source, SourceError, ZipSource, GoogleDriveSource
@@ -173,6 +173,38 @@ def _restore_missing_files(db: Session, source: Source, rep: Reporter, storage) 
     return list(again.values())
 
 
+RETRY_PER_CYCLE = 25
+RETRYABLE_ERRORS = ("%No such file or directory%", "%missing from storage%", "Interrupted by a server restart%")
+
+
+def _retry_lost_file_failures(db: Session, user: User, opts: dict, rep: Reporter) -> None:
+    """A QC run that failed because a PDF was missing from the disk (or the server restarted) is not a final answer: once the file is
+    readable again (it is fetched from Drive on demand) the analysis is simply run again — only for projects handed to a QC lead."""
+    if not opts.get("run_qc", True):
+        return
+    failed = db.execute(select(QCRun).where(QCRun.status == "failed", or_(*[QCRun.error.like(p) for p in RETRYABLE_ERRORS]))
+                        .order_by(QCRun.id.desc())).scalars().all()
+    done: set[int] = set()
+    for run in failed:
+        if run.form_id in done or len(done) >= RETRY_PER_CYCLE:
+            continue
+        done.add(run.form_id)
+        form = db.get(Form, run.form_id)
+        edited = workflow.latest_edited(form) if form else None
+        current = workflow.current_run(db, form) if form else None
+        if not form or not edited or current is None or current.id != run.id or db.get(ProjectReviewer, form.project_id) is None:
+            continue
+        try:
+            new = pipeline.create_run(db, form, edited, user)
+            pipeline.execute_run(db, new.id)
+            rep.stats["qc_retried"] += 1
+            rep.form_ids.append(form.id)
+        except Exception as exc:  # noqa: BLE001
+            rep.stats["qc_errors"] += 1
+            rep.say(f"{form.form_code}: QC could not be run again ({exc})")
+        rep.flush()
+
+
 def _unchanged(rep: Reporter, node: Node | None) -> bool:
     if node is None:
         return True
@@ -226,6 +258,7 @@ def import_tree(db: Session, job: ImportJob, source: Source, user: User) -> None
             if _import_project(db, source, user, client, project, items, opts, rep, storage) is False:
                 break
     _finish_pass2(db, user, restored, opts, rep)           # QC again for the forms whose lost PDFs were just restored
+    _retry_lost_file_failures(db, user, opts, rep)         # ... and for forms whose earlier QC failed only because a PDF was missing
     _ai_edit_stale(db, rep, opts)
     try:
         n_sheet = media.reconcile_sheet_links(db)

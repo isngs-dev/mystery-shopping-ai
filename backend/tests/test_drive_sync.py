@@ -320,3 +320,26 @@ def test_opening_a_lost_pdf_restores_it_on_demand(api, ctx, drive, monkeypatch):
         p.unlink()
     r = api("manager").get(f"/api/documents/{doc_id}/file")
     assert r.status_code == 404 and "missing from storage" in r.json()["detail"]
+
+
+def test_qc_that_failed_for_a_lost_pdf_is_run_again_by_the_next_sync(api, ctx, drive):
+    enable(api("manager"))
+    t0 = utcnow()
+    assert job(drive_sync.tick(t0))["stats"]["qc_runs"] == 2
+    db = SessionLocal()
+    f1 = db.scalars(select(Form).where(Form.form_code == "9910001")).one()
+    run = db.scalars(select(QCRun).where(QCRun.form_id == f1.id).order_by(QCRun.id.desc())).first()
+    run.status, run.error = "failed", "Unexpected processing error: [Errno 2] No such file or directory: '/data/storage/x.pdf'"
+    f2 = db.scalars(select(Form).where(Form.form_code == "9910002")).one()
+    r2 = db.scalars(select(QCRun).where(QCRun.form_id == f2.id).order_by(QCRun.id.desc())).first()
+    r2.status, r2.error = "failed", "Text could not be extracted reliably (Tesseract binary not found)"          # a real, lasting failure: not retried
+    db.commit()
+    f1_id, f2_id = f1.id, f2.id
+    db.close()
+    j = job(drive_sync.tick(t0 + timedelta(minutes=6)))
+    assert j["stats"]["qc_retried"] == 1
+    db = SessionLocal()
+    latest = lambda fid: db.scalars(select(QCRun).where(QCRun.form_id == fid).order_by(QCRun.id.desc())).first()      # noqa: E731
+    assert latest(f1_id).status in ("completed", "completed_with_warnings")
+    assert latest(f2_id).status == "failed" and "Tesseract" in latest(f2_id).error
+    db.close()
