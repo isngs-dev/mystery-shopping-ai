@@ -56,6 +56,24 @@ def save(db: Session, patch: dict) -> dict:
     return cfg
 
 
+def ensure_default_on() -> bool:
+    """DRIVE_AUTO_SYNC=true means "always on": at start-up the sync is switched on (and QC with it) without anybody clicking, also after
+    a database change or when the account that once enabled it is gone. Set DRIVE_AUTO_SYNC=false to leave it to the admin page."""
+    if not get_settings().drive_auto_sync:
+        return False
+    db = SessionLocal()
+    try:
+        cfg = load(db)
+        owner = db.get(User, cfg["enabled_by"]) if cfg["enabled_by"] else None
+        owner_ok = owner is not None and owner.is_active and has_perm(owner, "integrations.manage")
+        if cfg["enabled"] and cfg["run_qc"] and (owner_ok or not cfg["enabled_by"]):
+            return False
+        save(db, {"enabled": True, "run_qc": True, "last_error": None, "next_run_at": None, "enabled_by": cfg["enabled_by"] if owner_ok else None})
+        return True
+    finally:
+        db.close()
+
+
 def _dt(v: str | None) -> datetime | None:
     return datetime.fromisoformat(v) if v else None
 

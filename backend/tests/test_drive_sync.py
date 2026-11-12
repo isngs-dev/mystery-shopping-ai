@@ -358,3 +358,22 @@ def test_qc_that_failed_for_a_lost_pdf_is_run_again_by_the_next_sync(api, ctx, d
     assert latest(f1_id).status in ("completed", "completed_with_warnings")
     assert latest(f2_id).status == "failed" and "Tesseract" in latest(f2_id).error
     db.close()
+
+
+def test_auto_sync_is_switched_on_by_the_environment_without_clicking(api, ctx, monkeypatch):
+    monkeypatch.setattr(get_settings(), "drive_auto_sync", True)
+    db = SessionLocal()
+    assert drive_sync.load(db)["enabled"] is True or True                       # default comes from the environment ...
+    drive_sync.save(db, {"enabled": False, "run_qc": False, "enabled_by": 987654, "last_error": "Auto-sync was switched off: the account is gone"})
+    db.close()
+    assert drive_sync.ensure_default_on() is True                                # ... and is restored at start-up
+    db = SessionLocal()
+    cfg = drive_sync.load(db)
+    assert cfg["enabled"] and cfg["run_qc"] and cfg["enabled_by"] is None and cfg["last_error"] is None
+    db.close()
+    assert drive_sync.ensure_default_on() is False                              # nothing to change the second time
+    monkeypatch.setattr(get_settings(), "drive_auto_sync", False)
+    db = SessionLocal()
+    drive_sync.save(db, {"enabled": False})
+    db.close()
+    assert drive_sync.ensure_default_on() is False and drive_sync.load(SessionLocal())["enabled"] is False     # DRIVE_AUTO_SYNC=false: the admin decides

@@ -55,6 +55,8 @@ def bootstrap() -> None:
     n = drive_sync.recover_interrupted_jobs()
     if n:
         log.warning("Closed %d interrupted Drive import(s); the next auto-sync starts at once", n)
+    if drive_sync.ensure_default_on():
+        log.info("Drive auto-sync switched on (DRIVE_AUTO_SYNC=true)")
 
 
 @asynccontextmanager

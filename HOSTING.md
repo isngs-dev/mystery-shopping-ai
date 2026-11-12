@@ -35,6 +35,13 @@ Railway, Fly.io or any VPS with Docker.
 Costs: the web service needs a paid plan (always-on + persistent disk) and the database a paid plan too; see Render's current prices.
 A free web service sleeps, which would stop the Drive sync and the QC.
 
+## Nothing to click: what runs by itself
+
+With `DRIVE_AUTO_SYNC=true` (set in `render.yaml`) the Drive sync is switched on at every start-up, with QC. From then on, every 2 minutes:
+new or changed PDFs in Drive are imported → QC runs on every complete RAW + edited pair (also for forms that never got an analysis) → the project's
+Excel QC report is rewritten → the report can be downloaded straight from **Repository** (project card: *QC report (Excel)*, form row: *PDF*).
+Assigning a project to an editor only decides who reviews it. Set `DRIVE_AUTO_SYNC=false` if the admin page should decide instead.
+
 ## The persistent disk is not optional
 
 The PDFs live on the disk mounted at `/data`; the forms' records live in PostgreSQL. A service **without a disk** loses every PDF each time

@@ -1,7 +1,7 @@
 import { DragEvent, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ChevronRight, FileSpreadsheet, FileUp, Folder, FolderOpen, RefreshCw, Search, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Download, FileSpreadsheet, FileUp, Folder, FolderOpen, RefreshCw, Search, UploadCloud } from 'lucide-react'
 import { api, download, qs } from '../lib/api'
 import { ago, fmtDate, ISSUE_LABEL, STATUS } from '../lib/format'
 import { Alert, Badge, Field, Modal, PageHeader, Pager, SkeletonRows, StatusBadge, Tabs, useToast } from '../components/ui'
@@ -105,9 +105,10 @@ export default function Repository() {
   const toast = useToast()
   // hand a whole project to an editor (QC lead) straight from its folder card
   const canAssign = can('projects.assign_reviewer')
-  const overview = useQuery({ queryKey: ['qc-projects', true], queryFn: () => api.get<any[]>('/api/qc/projects'), enabled: canAssign, refetchInterval: 15000 })
+  const overview = useQuery({ queryKey: ['qc-projects', true], queryFn: () => api.get<any[]>('/api/qc/projects'), enabled: can('qc.report'), refetchInterval: 15000 })
   const people = useQuery({ queryKey: ['dir', 'assign-editors'], queryFn: () => api.get<any[]>('/api/users/directory?roles=qc_reviewer,manager&for_project_assignment=true'), enabled: canAssign })
   const [pick, setPick] = useState<Record<number, string>>({})
+  const statsOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o]))       // QC progress of every project: it runs by itself after each Drive sync
   const reviewerOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o.reviewer]))
   const suggestedOf = new Map<number, any>((overview.data || []).map((o) => [o.id, o.suggested_reviewer]))     // the person the Drive folder name points to ("Orlando_Devansh")
   const assign = useMutation({
@@ -168,6 +169,17 @@ export default function Repository() {
                         <span className="min-w-0"><b className="block truncate">{p.name}</b><span className="text-xs text-muted">{p.forms} form{p.forms === 1 ? '' : 's'}</span></span>
                         <ChevronRight size={16} className="ml-auto shrink-0 text-muted" />
                       </button>
+                      {can('qc.report') && (() => {
+                        const st = statsOf.get(p.id)
+                        if (!st) return null
+                        const done = st.decided + st.to_review + st.ready_to_decide
+                        return (
+                          <div className="flex flex-wrap items-center gap-2 border-t pt-3 text-xs">
+                            <Badge t={st.forms > 0 && done === st.forms ? 'ok' : st.analysing > 0 ? 'brand' : 'muted'}>QC {done}/{st.forms} done{st.analysing > 0 ? ` · ${st.analysing} running` : ''}</Badge>
+                            {st.qc_failed > 0 && <Badge t="danger">{st.qc_failed} failed</Badge>}
+                            {st.forms > 0 && <button className="btn-ghost ml-auto !px-2.5 !py-1 text-xs" title="QC report of every form of this project (Excel)" onClick={() => download(`/api/qc/projects/${p.id}/report.xlsx`, `QC_Report_${p.name}.xlsx`).then(() => toast('ok', 'Excel QC report downloaded')).catch((e) => toast('error', e.message))}><FileSpreadsheet size={13} /> QC report (Excel)</button>}
+                          </div>)
+                      })()}
                       {canAssign && (
                         <div className="border-t pt-3 text-xs">
                           <p className="mb-1.5 text-muted">Editor: {current ? <b className="text-ink">{current.name}</b> : <span className="font-semibold text-warn">not assigned</span>}{hint && <span className="ml-1">· folder name suggests {hint.name}</span>}</p>
@@ -202,7 +214,7 @@ export default function Repository() {
               {forms.isLoading ? <SkeletonRows /> : forms.isError ? <div className="p-4"><Alert kind="error">{(forms.error as Error).message}</Alert></div> : forms.data.items.length === 0 ? (
                 <EmptyState kind="search" title="No forms found" action={canUpload && <button className="btn-primary" onClick={() => setUpload(true)}>Upload a RAW PDF</button>}>Try different filters, or upload the first RAW / edited pair.</EmptyState>
               ) : (
-                <table className="w-full min-w-[760px]"><thead><tr className="border-b"><th className="th">Form ID</th><th className="th">Logical path</th><th className="th">Pair</th><th className="th">Versions</th><th className="th">Status</th><th className="th">Uploaded</th></tr></thead>
+                <table className="w-full min-w-[760px]"><thead><tr className="border-b"><th className="th">Form ID</th><th className="th">Logical path</th><th className="th">Pair</th><th className="th">Versions</th><th className="th">Status</th><th className="th">Uploaded</th>{can('qc.report') && <th className="th">QC report</th>}</tr></thead>
                   <tbody>{forms.data.items.map((r: any) => (
                     <tr key={r.id} className="border-b last:border-0 hover:bg-surface2/50">
                       <td className="td"><Link to={`/app/forms/${r.id}`} className="font-bold text-brand hover:underline">{r.form_code}</Link>{r.is_sample && <Badge t="warn" className="ml-2">SAMPLE</Badge>}</td>
@@ -211,6 +223,7 @@ export default function Repository() {
                       <td className="td tabular-nums">{r.edited_versions ? `v${r.edited_versions}` : '—'}</td>
                       <td className="td"><StatusBadge status={r.status} /></td>
                       <td className="td text-muted">{fmtDate(r.created_at, false)}</td>
+                      {can('qc.report') && <td className="td">{r.edited_versions > 0 ? <button className="btn-ghost !px-2 !py-1 text-xs" title="Download the QC report (PDF) of this form" onClick={() => download(`/api/forms/${r.id}/qc-report`, `QC_Report_${r.form_code}.pdf`).then(() => toast('ok', 'QC report downloaded')).catch((e) => toast('error', e.message))}><Download size={13} /> PDF</button> : <span className="text-xs text-muted">—</span>}</td>}
                     </tr>))}</tbody></table>
               )}
               {forms.data && <Pager total={forms.data.total} limit={limit} offset={offset} onChange={setOffset} />}
