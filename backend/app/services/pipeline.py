@@ -18,7 +18,7 @@ from ..db import SessionLocal, utcnow
 from ..enums import AIStatus, FormStatus, RunStatus
 from ..models import Document, DocumentPage, Finding, Form, QCRun, User
 from ..storage import get_storage
-from . import ai_analysis, compare, error_taxonomy as tx, qc_reports, template_guard
+from . import ai_analysis, compare, error_taxonomy as tx, file_restore, qc_reports, template_guard
 from .ai import AIError, resolve_provider
 from .extraction import extract_pdf
 from .rules_engine import Candidate, Ctx, injection_hits, run_deterministic
@@ -62,7 +62,7 @@ def create_run(db: Session, form: Form, edited: Document | None, user: User | No
 def ensure_extracted(db: Session, doc: Document) -> None:
     if doc.extraction_status in ("ok", "partial") and doc.pages and (doc.extraction_summary or {}).get("order") == "geometric":
         return
-    data = get_storage().get(doc.storage_key)
+    data = file_restore.read_document(db, doc)         # a PDF missing from the disk is fetched again from Drive
     res = extract_pdf(data)
     for p in list(doc.pages):
         db.delete(p)

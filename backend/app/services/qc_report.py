@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..models import AutoEdit, Document, Finding, Form, QCRun, ReviewAttempt, User
 from ..storage import get_storage
-from . import error_taxonomy as tx, workflow
+from . import error_taxonomy as tx, file_restore, workflow
 
 E = html.escape
 SEV_COLOR = {"critical": "#b3261e", "major": "#b25e00", "minor": "#1d5fb4", "info": "#5b6470"}
@@ -82,8 +82,13 @@ def build_report(db: Session, form: Form, generated_by: User) -> tuple[bytes, st
     findings: list[Finding] = sorted(run.findings, key=lambda f: (cat_rank.get(f.category, 9), f.error_subtype or "", f.edited_page or f.raw_page or 0, f.id)) if run else []
     auto = db.execute(select(AutoEdit).where(AutoEdit.form_id == form.id, AutoEdit.result_document_id == (edited.id if edited else -1))
                       .order_by(AutoEdit.id.desc())).scalars().first()
-    raw_bytes = storage.get(raw.storage_key) if raw else None
-    ed_bytes = storage.get(edited.storage_key) if edited else None
+    def _bytes(doc):
+        try:
+            return file_restore.read_document(db, doc) if doc else None
+        except file_restore.FileMissing:
+            return None                                  # the report is still built; evidence crops are left out
+
+    raw_bytes, ed_bytes = _bytes(raw), _bytes(edited)
     arch = pymupdf.Archive()
 
     h: list[str] = []

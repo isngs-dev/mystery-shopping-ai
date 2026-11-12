@@ -19,7 +19,7 @@ from ..models import (Assignment, AutoEdit, Client, MediaLink, Document, Excepti
 from ..permissions import (accessible_project_ids, form_scope_clause, get_form_or_404, has_perm)
 from ..serializers import (assignment_out, autoedit_out, attempt_out, comment_out, document_out, exception_out, form_out, iso,
                            run_out)
-from ..services import auto_editor, jobs, naming, pipeline, repository, workflow
+from ..services import auto_editor, file_restore, jobs, naming, pipeline, repository, workflow
 from ..storage import StorageNotConfigured, get_storage
 
 router = APIRouter(prefix="/api", tags=["forms"])
@@ -216,7 +216,11 @@ def document_file(doc_id: int, request: Request, user: User = Depends(get_curren
     doc, form = _doc_or_404(db, user, doc_id)
     audit(db, user, "document.downloaded", entity_type="document", entity_id=doc.id, form_id=form.id, project_id=form.project_id, request=request)
     db.commit()
-    return Response(get_storage().get(doc.storage_key), media_type="application/pdf",
+    try:
+        data = file_restore.read_document(db, doc)
+    except file_restore.FileMissing as exc:
+        raise HTTPException(404, str(exc))
+    return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{doc.stored_name}"', "Cache-Control": "private, max-age=300",
                              "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
 
@@ -227,7 +231,11 @@ def page_image(doc_id: int, page_no: int, zoom: float = Query(1.5, ge=0.5, le=4.
     doc, _ = _doc_or_404(db, user, doc_id)
     if page_no < 1 or (doc.page_count and page_no > doc.page_count):
         raise HTTPException(404, "Page out of range.")
-    pdf = pymupdf.open(stream=get_storage().get(doc.storage_key), filetype="pdf")
+    try:
+        raw_pdf = file_restore.read_document(db, doc)
+    except file_restore.FileMissing as exc:
+        raise HTTPException(404, str(exc))
+    pdf = pymupdf.open(stream=raw_pdf, filetype="pdf")
     try:
         pix = pdf.load_page(page_no - 1).get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
         png = pix.tobytes("png")

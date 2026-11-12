@@ -292,3 +292,31 @@ def test_pdfs_lost_from_the_disk_are_fetched_again_from_drive(api, ctx, drive):
     (drive.proj / "9910001_1.pdf").write_bytes(review_pdf("9910001", "Another narrative entirely."))
     j2 = job(drive_sync.tick(t0 + timedelta(minutes=12)))
     assert j2["stats"].get("files_restored", 0) == 0 and j2["stats"]["restore_failed"] >= 1
+
+
+def test_opening_a_lost_pdf_restores_it_on_demand(api, ctx, drive, monkeypatch):
+    """The PDF viewer / QC / report must not 500 when the file vanished from the disk: it is fetched again from Drive on the spot."""
+    from app.services import file_restore
+    from app.storage import get_storage
+
+    enable(api("manager"))
+    job(drive_sync.tick(utcnow()))
+    db = SessionLocal()
+    f1 = db.scalars(select(Form).where(Form.form_code == "9910001")).one()
+    raw = next(d for d in f1.documents if d.kind == "raw")
+    doc_id, key = raw.id, raw.storage_key
+    db.close()
+    store = get_storage()
+    path = store._path(key)
+    path.chmod(0o666)
+    path.unlink()
+    r = api("manager").get(f"/api/documents/{doc_id}/file")
+    assert r.status_code == 200 and r.content.startswith(b"%PDF") and store.exists(key)                 # restored while serving it
+    # no way back (Drive file gone): a clear 404 instead of "Unexpected server error"
+    path = store._path(key)
+    path.chmod(0o666)
+    path.unlink()
+    for p in drive.proj.glob("9910001_1.pdf"):
+        p.unlink()
+    r = api("manager").get(f"/api/documents/{doc_id}/file")
+    assert r.status_code == 404 and "missing from storage" in r.json()["detail"]
