@@ -24,7 +24,7 @@ from ..audit import audit
 from ..db import SessionLocal, utcnow
 from ..models import AutoEdit, Client, Document, DriveFile, ExceptionItem, Form, ImportJob, Notification, Project, ProjectReviewer, TrackerEntry, User, UserProjectAccess
 from ..storage import get_storage, safe_segment
-from . import auto_editor, media, pipeline, qc_reports, repository, rules_pack
+from . import auto_editor, media, pipeline, qc_reports, repository, rules_pack, workflow
 from .drive_sources import LocalSource, Node, Source, SourceError, ZipSource, GoogleDriveSource
 from ..config import get_settings
 
@@ -140,6 +140,39 @@ def _record(db: Session, rep: Reporter, node: Node, path: str, kind: str, form: 
     row.document_id = doc.id if doc else row.document_id
 
 
+def _restore_missing_files(db: Session, source: Source, rep: Reporter, storage) -> list:
+    """A document row whose PDF is gone from the storage disk is fetched again from the Drive file it came from.
+    Only byte-identical content is restored (the stored SHA-256 must match); returns [(form, latest edited document)] to QC again."""
+    again: dict[int, tuple] = {}
+    for row in list(rep.ledger.values()):
+        if not row.document_id or row.kind not in ("raw", "edited"):
+            continue
+        doc = db.get(Document, row.document_id)
+        if doc is None or doc.status != "stored" or storage.exists(doc.storage_key):
+            continue
+        try:
+            data = source.read(Node(row.drive_id, row.path.rsplit("/", 1)[-1], False, row.size, "", row.version))
+        except Exception as exc:  # noqa: BLE001
+            rep.stats["restore_failed"] += 1
+            rep.say(f"{doc.stored_name}: the stored file is missing and could not be fetched again ({exc})")
+            continue
+        if repository.sha256_of(data) != doc.sha256:
+            rep.stats["restore_failed"] += 1
+            rep.say(f"{doc.stored_name}: the stored file is missing and the Drive file has changed since, so the original cannot be restored")
+            continue
+        storage.put_immutable(doc.storage_key, data)
+        rep.stats["files_restored"] += 1
+        form = db.get(Form, row.form_id) if row.form_id else None
+        edited = workflow.latest_edited(form) if form else None
+        if form and edited:
+            again[form.id] = (form, edited)
+        qc_reports.mark_dirty(form.project_id if form else None)
+    if rep.stats.get("files_restored"):
+        rep.say(f"{rep.stats['files_restored']} missing PDF(s) were restored from Drive")
+    db.commit()
+    return list(again.values())
+
+
 def _unchanged(rep: Reporter, node: Node | None) -> bool:
     if node is None:
         return True
@@ -154,6 +187,7 @@ def import_tree(db: Session, job: ImportJob, source: Source, user: User) -> None
     rep.source_key = f"{source.kind}:{source.key}"
     rep.ledger = {r.drive_id: r for r in db.execute(select(DriveFile).where(DriveFile.source_key == rep.source_key)).scalars()}
     storage = get_storage()
+    restored = _restore_missing_files(db, source, rep, storage)       # files lost from the disk (e.g. a host without a persistent disk) come back from Drive
     root = source.root()
     top = source.children(root)
     rep.say(f"Source: {source.label} ({source.kind}); {sum(1 for n in top if n.is_dir)} folder(s) and {sum(1 for n in top if not n.is_dir)} file(s) at the top level")
@@ -191,6 +225,7 @@ def import_tree(db: Session, job: ImportJob, source: Source, user: User) -> None
             project = get_project(db, client, pname, user, rep)
             if _import_project(db, source, user, client, project, items, opts, rep, storage) is False:
                 break
+    _finish_pass2(db, user, restored, opts, rep)           # QC again for the forms whose lost PDFs were just restored
     _ai_edit_stale(db, rep, opts)
     try:
         n_sheet = media.reconcile_sheet_links(db)

@@ -258,3 +258,37 @@ def test_scheduler_thread_ticks_and_stops(monkeypatch):
     sched.stop()
     time.sleep(0.1)
     assert len(calls) >= 3 and not sched.running
+
+
+def test_pdfs_lost_from_the_disk_are_fetched_again_from_drive(api, ctx, drive):
+    from app.storage import get_storage
+
+    enable(api("manager"))
+    t0 = utcnow()
+    assert job(drive_sync.tick(t0))["stats"]["raw_imported"] == 3
+    db = SessionLocal()
+    f1 = db.scalars(select(Form).where(Form.form_code == "9910001")).one()
+    lost = [d for d in f1.documents]                                          # RAW + edited of one form vanish (host without a persistent disk)
+    store = get_storage()
+
+    def remove(key):                                                          # stored PDFs are read-only
+        path = store._path(key)
+        path.chmod(0o666)
+        path.unlink()
+
+    for d in lost:
+        remove(d.storage_key)
+        assert not store.exists(d.storage_key)
+    db.close()
+    j = job(drive_sync.tick(t0 + timedelta(minutes=6)))
+    assert j["stats"]["files_restored"] == 2 and j["stats"].get("restore_failed", 0) == 0 and j["stats"]["qc_runs"] == 1
+    db = SessionLocal()
+    f1 = db.scalars(select(Form).where(Form.form_code == "9910001")).one()
+    assert all(store.exists(d.storage_key) for d in f1.documents)
+    db.close()
+    # the Drive file changed after the loss: the original cannot be restored, and that is reported rather than hidden
+    d0 = lost[0]
+    remove(d0.storage_key)
+    (drive.proj / "9910001_1.pdf").write_bytes(review_pdf("9910001", "Another narrative entirely."))
+    j2 = job(drive_sync.tick(t0 + timedelta(minutes=12)))
+    assert j2["stats"].get("files_restored", 0) == 0 and j2["stats"]["restore_failed"] >= 1

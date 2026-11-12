@@ -35,6 +35,14 @@ Railway, Fly.io or any VPS with Docker.
 Costs: the web service needs a paid plan (always-on + persistent disk) and the database a paid plan too; see Render's current prices.
 A free web service sleeps, which would stop the Drive sync and the QC.
 
+## The persistent disk is not optional
+
+The PDFs live on the disk mounted at `/data`; the forms' records live in PostgreSQL. A service **without a disk** loses every PDF each time
+it restarts or redeploys, while the database keeps the records — the website then shows the forms but "The page could not be rendered"
+and QC fails with `[Errno 2] No such file or directory: '/data/storage/…'`. Add the disk (Render → service → **Disks** → mount path
+`/data`) before anything else. If PDFs were already lost, the Drive auto-sync fetches them again by itself (byte-identical files only) and
+runs QC on those forms again; "Sync now" does it immediately.
+
 ## What is different from running on your PC
 
 * The database is PostgreSQL, not the local SQLite file. **Nothing from the local database is copied**: forms are imported again from
