@@ -35,7 +35,8 @@ SOURCES = ("google_drive", "local")
 def defaults() -> dict:
     s = get_settings()
     return {"enabled": bool(s.drive_auto_sync), "interval_minutes": max(1, s.drive_sync_interval_minutes), "source": "google_drive",
-            "folder_id": s.google_drive_folder_id, "local_path": None, "ai_edit_missing": False, "ai_edit_after_hours": 24, "run_qc": True,
+            "folder_id": s.google_drive_folder_id, "local_path": None, "ai_edit_missing": bool(s.drive_ai_edit_raw_only),
+            "ai_edit_after_hours": max(0.0, float(s.drive_ai_edit_after_hours)), "run_qc": True,
             "max_forms_per_cycle": 200, "enabled_by": None, "last_run_at": None, "next_run_at": None, "last_job_id": None,
             "last_error": None, "last_result": None}
 
@@ -66,9 +67,13 @@ def ensure_default_on() -> bool:
         cfg = load(db)
         owner = db.get(User, cfg["enabled_by"]) if cfg["enabled_by"] else None
         owner_ok = owner is not None and owner.is_active and has_perm(owner, "integrations.manage")
-        if cfg["enabled"] and cfg["run_qc"] and (owner_ok or not cfg["enabled_by"]):
+        s = get_settings()
+        want_edit = bool(s.drive_ai_edit_raw_only)
+        if cfg["enabled"] and cfg["run_qc"] and cfg["ai_edit_missing"] == want_edit and (owner_ok or not cfg["enabled_by"]):
             return False
-        save(db, {"enabled": True, "run_qc": True, "last_error": None, "next_run_at": None, "enabled_by": cfg["enabled_by"] if owner_ok else None})
+        save(db, {"enabled": True, "run_qc": True, "ai_edit_missing": want_edit,
+                  "ai_edit_after_hours": max(0.0, float(s.drive_ai_edit_after_hours)) if want_edit else cfg["ai_edit_after_hours"],
+                  "last_error": None, "next_run_at": None, "enabled_by": cfg["enabled_by"] if owner_ok else None})
         return True
     finally:
         db.close()

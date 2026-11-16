@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     import_grant_roles: str = "admin,manager"   # roles that automatically get access to projects created by a Drive import (QC leads get their own folders)
     drive_auto_sync: bool = False                # default for "enabled" when nothing has been saved yet
     drive_sync_interval_minutes: int = 5
+    # A RAW that arrives without an edited file is edited by the AI editor (grammar rules: spelling, punctuation, spacing, capitals, a/an)
+    # after this many hours — 0 = at once — and goes to QC. DRIVE_AI_EDIT_RAW_ONLY=false leaves RAW-only forms to the human editors.
+    drive_ai_edit_raw_only: bool = True
+    drive_ai_edit_after_hours: float = 0.0
 
     # Review policy
     allow_self_review: bool = False  # independent-review policy: editors cannot approve own work

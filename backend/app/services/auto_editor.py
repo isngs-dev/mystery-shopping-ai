@@ -143,9 +143,26 @@ def rule_based_edits(toks: list[Tok], allowed_terms: set[str] | None = None, pro
             add(j, j + 2, keep.text, f"Repeated word “{core}” removed", "grammar", 0.95)
             continue
 
+        plain = not re.search(r"://|@|www\.|\.[a-z]{2,4}/", t.text, re.I)        # never touch links and e-mail addresses
+        # --- doubled punctuation ("doing .." / "well,,") -> one mark (QC: Grammar › Punctuation)
+        if plain and re.fullmatch(r"[.,;:!?]{2,}", t.text) and t.text != "..." and prev and prev.page == t.page and prev.line == t.line \
+                and not re.search(r"[.,;:!?]$", prev.text):
+            add(j - 1, j + 1, prev.text + t.text[0], "Doubled punctuation reduced to one mark", "punctuation", 0.85)
+            continue
+        if plain and "..." not in t.text and re.search(r"(?<!\.)\.\.(?!\.)|([,;:!?])\1+", t.text) and re.search(r"[A-Za-z]", t.text):
+            fixed = re.sub(r"([,;:!?])\1+", r"\1", re.sub(r"(?<!\.)\.\.(?!\.)", ".", t.text))
+            if fixed != t.text:
+                add(j, j + 1, fixed, "Doubled punctuation reduced to one mark", "punctuation", 0.85)
+                continue
+        # --- no space after punctuation ("store.The" -> "store. The")  (QC: Grammar › Extra Space/No space)
+        if plain and re.fullmatch(r"[A-Za-z]{2,}[,;:][A-Za-z]{2,}|[a-z]{3,}\.[A-Z][a-z]{2,}", t.text):
+            fixed = re.sub(r"^([A-Za-z]{2,}[,;:]|[a-z]{3,}\.)([A-Za-z]{2,})$", r"\1 \2", t.text)
+            add(j, j + 1, fixed, "Missing space after punctuation added", "spacing", 0.85)
+            continue
+
         # --- space before punctuation
         if t.text in {",", ".", ";", ":", "!", "?"} and prev and prev.page == t.page and prev.line == t.line and not re.search(r"[.,;:!?]$", prev.text):
-            add(j - 1, j + 1, prev.text + t.text, f"Stray space before “{t.text}” removed", "punctuation", 0.9)
+            add(j - 1, j + 1, prev.text + t.text, f"Stray space before “{t.text}” removed", "spacing", 0.9)
             continue
 
         # --- capitalisation

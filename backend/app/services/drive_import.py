@@ -465,6 +465,9 @@ def _ai_edit_stale(db: Session, rep: Reporter, opts: dict) -> None:
         return
     cutoff = utcnow() - timedelta(hours=float(opts.get("ai_edit_after_hours", 0) or 0))
     for row in list(rep.ledger.values()):
+        if rep.stats.get("ai_edited", 0) >= RETRY_PER_CYCLE:
+            rep.say(f"AI edit: {RETRY_PER_CYCLE} form(s) done in this cycle, the rest follow in the next ones")
+            break
         if row.kind != "raw" or not row.form_id or not row.document_id:
             continue
         form, raw_doc = db.get(Form, row.form_id), db.get(Document, row.document_id)

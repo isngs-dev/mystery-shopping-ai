@@ -161,3 +161,51 @@ def test_rule_editor_never_touches_facts():
     changed = " ".join(o.replacement for o in ops)
     assert "10:30" not in changed and "$45.50" not in changed and "not" not in changed
     assert any(o.replacement.startswith("The") for o in ops)                              # only capitalisation was fixed
+
+
+def test_rule_editor_fixes_the_grammar_rules_of_the_qc_table():
+    """Punctuation (doubled marks), Extra Space/No space (missing / stray space) and Spelling are edited; links and numbers are left alone."""
+    from app.services.auto_editor import rule_based_edits
+    from app.services.compare import build_tokens
+    from app.services.extraction import extract_pdf
+    from app.sample_docs import _render
+    pdf = _render(["The store was clean.The associate was kind .. I recieved my order,quickly and paid 10.50 at https://example.com/a..b today."])
+    ops, _ = rule_based_edits(build_tokens(extract_pdf(pdf).pages))
+    out = {o.original: (o.replacement, o.category) for o in ops}
+    assert out["clean.The"] == ("clean. The", "spacing")                                   # No space
+    assert out["kind .."] == ("kind.", "punctuation")                                        # doubled punctuation (stray space dropped too)
+    assert out["recieved"][1] == "spelling"
+    assert out["order,quickly"] == ("order, quickly", "spacing")
+    assert not any("10.50" in o.original or "example.com" in o.original for o in ops)        # figures and links untouched
+
+
+def test_raw_only_forms_are_edited_and_qcd_by_the_sync_without_waiting(api, ctx):
+    """DRIVE_AI_EDIT_RAW_ONLY (default): a RAW that arrives without an edited file is edited at once and goes to QC."""
+    import shutil
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal, utcnow
+    from app.models import Form, QCRun
+    from app.services import drive_sync
+    from .test_drive_sync import assign_to_qc, enable, job, review_pdf
+
+    s = get_settings()
+    assert s.drive_ai_edit_raw_only is True and s.drive_ai_edit_after_hours == 0
+    root = Path(s.import_local_root) / "drive_raw_only"
+    shutil.rmtree(root, ignore_errors=True)
+    (root / "APC" / "Valley Bank_Geeta").mkdir(parents=True)
+    (root / "APC" / "Valley Bank_Geeta" / "9920001_1.pdf").write_bytes(review_pdf("9920001", "The store was clean.The teller recieved me ."))
+    assign_to_qc(ctx)
+    mgr = api("manager")
+    r = mgr.put("/api/integrations/drive/auto", json={"enabled": True, "interval_minutes": 5, "source": "local", "local_path": "drive_raw_only",
+                                                       "run_qc": True, "ai_edit_missing": s.drive_ai_edit_raw_only, "ai_edit_after_hours": s.drive_ai_edit_after_hours})
+    assert r.status_code == 200, r.text
+    j = job(drive_sync.tick(utcnow()))
+    assert j["stats"]["raw_imported"] == 1 and j["stats"]["ai_edited"] == 1
+    db = SessionLocal()
+    f = db.scalars(select(Form).where(Form.form_code == "9920001")).one()
+    assert [d.origin for d in f.documents if d.kind == "edited"] == ["ai_assisted"] and f.status == "qc_review"
+    assert db.scalars(select(QCRun).where(QCRun.form_id == f.id)).first() is not None             # QC ran on the edited PDF
+    db.close()

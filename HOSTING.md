@@ -40,7 +40,7 @@ A free web service sleeps, which would stop the Drive sync and the QC.
 With `DRIVE_AUTO_SYNC=true` (set in `render.yaml`) the Drive sync is switched on at every start-up, with QC. From then on, every 2 minutes:
 new or changed PDFs in Drive are imported → QC runs on every complete RAW + edited pair (also for forms that never got an analysis) → the project's
 Excel QC report is rewritten → the report can be downloaded straight from **Repository** (project card: *QC report (Excel)*, form row: *PDF*).
-Assigning a project to an editor only decides who reviews it. Set `DRIVE_AUTO_SYNC=false` if the admin page should decide instead.
+RAW-only forms (no `_2` in Drive) are edited at once by the built-in grammar editor (spelling, doubled punctuation, missing/stray spaces, capital letters, a/an; numbers, names and links are never touched) and go straight to QC (`DRIVE_AI_EDIT_RAW_ONLY`, `DRIVE_AI_EDIT_AFTER_HOURS=0`). Assigning a project to an editor only decides who reviews it. Set `DRIVE_AUTO_SYNC=false` if the admin page should decide instead.
 
 ## The persistent disk is not optional
 
