@@ -27,7 +27,7 @@ rules**, lets a human cross-check, and creates the edited PDF with QC.
 3. Open a RAW form in Google Drive and sign in in the panel with your platform account (e-mail + password). The token is kept in the browser; the
    password is not stored.
 
-Allowed roles: Admin, Manager (Editor & QC Manager), QC Lead (Editor & QC Lead), Editor. Only Manager / Admin can confirm; only a Manager can add rules.
+Allowed roles: Admin, Manager (Editor & QC Manager), QC Lead (Editor & QC Lead), Editor. Everyone listed can cross-check and forward a form; Manager / Admin also see the forwarded list; only a Manager can add rules.
 
 ## Server side (what must be set up)
 * `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=…` and `AI_ALLOW_EXTERNAL=true` (the PDFs' text is sent to the model — approve that first). Put these in the
@@ -43,9 +43,10 @@ Allowed roles: Admin, Manager (Editor & QC Manager), QC Lead (Editor & QC Lead),
   (marked *draft*); QC counts them only after approval.
 * **Pop-up cards while you scroll** (⚡ switches them off): the edit in the middle of the screen gets a card with Accept / Dismiss, *Your wording* and a
   *Comment for the AI* box. **Ask AI** re-edits just that passage using your comment; **Add an edit the AI missed** adds your own edit.
-* **Editors** (QC leads, editors) cross-check and press **Send to the leader**. The leader (Manager role) sees every final edit with the editors' comments,
-  can still change them, and either **Confirms** (creates the edited PDF and starts QC for that form) or **Sends it back** with a note. The ☰ button lists
-  the forms waiting for the leader.
+* **The panel opens by itself** as soon as a RAW form is opened in Drive and starts working (client, rules, AI edits). Whoever cross-checks the edits
+  (editor, QC lead, manager) forwards the form with **Create edited PDF + QC**: the edited PDF is created from the accepted edits and QC starts.
+* **The leader** (Manager) sees what was decided under **☰ Forwarded forms**: who forwarded it, how many edits were accepted, dismissed, reworded by a
+  person, added by hand or commented (with the details), and the QC result.
 * **The leader can add grammar rules** for the client or project (*+ Add a grammar rule*): used for editing at once, counted in QC after approval.
 * Keep `DRIVE_AI_EDIT_RAW_ONLY=false` on the server, otherwise the Drive sync edits a RAW-only form by itself before a human has looked at it.
 

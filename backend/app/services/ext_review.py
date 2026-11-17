@@ -20,7 +20,7 @@ from ..models import AutoEdit, DriveFile, Form, QCRule, RuleVersion, User
 from . import auto_editor, error_taxonomy as tx, form_context, rules_service, template_guard
 from .ai import AIError, resolve_provider
 from .compare import boxes_for
-from .ext_assist import GRAMMAR, ExtError, _edit_id, _page_dims, _prepare, _raw, grammar_rules, unsafe_replacement
+from .ext_assist import GRAMMAR, ExtError, _edit_id, _page_dims, _prepare, _raw, edit_context, grammar_rules, unsafe_replacement
 
 
 def _open(db: Session, form: Form, proposal_id: int, *states: str) -> AutoEdit:
@@ -148,7 +148,7 @@ def add_manual(db: Session, form: Form, user: User, *, proposal_id: int, origina
         raise ExtError(f"“{replacement}” {bad}", 422)
     op = auto_editor.EditOp(i1, i2, replacement, auto_editor._text(toks, i1, i2), f"Added by {user.name}", category if category in tx_cats() else "grammar", 1.0, "human", toks[i1].page)
     edit = {"id": _edit_id(op), "page": op.page, "original": op.original, "replacement": op.replacement, "reason": op.reason, "category": op.category,
-            "confidence": 1.0, "source": "human", "i1": i1, "i2": i2, "raw_boxes": boxes_for(toks, i1, i2)}
+            "confidence": 1.0, "source": "human", "i1": i1, "i2": i2, "raw_boxes": boxes_for(toks, i1, i2), **edit_context(toks, i1, i2)}
     existing = list(ae.edits or [])
     if any(not (edit["i2"] <= x["i1"] or edit["i1"] >= x["i2"]) for x in existing):
         raise ExtError("That place already has an edit; change that edit instead.", 409)
@@ -237,3 +237,26 @@ def add_rule(db: Session, user: User, form: Form, *, name: str, description: str
     db.commit()
     return {"key": key, "version_id": rv.id, "name": rv.name, "error": tx.label(rv.error_subtype), "subtype": rv.error_subtype, "description": rv.description,
             "examples": rv.examples, "scope": "project" if pid else "client", "company_specific": True, "status": "draft", "added_by": user.name}
+
+
+def forwarded(db: Session, user: User, limit: int = 30) -> list[dict]:
+    """Forms the editors cross-checked and forwarded to QC through the extension, newest first, with what they decided and the QC result so far."""
+    from ..permissions import form_scope_clause
+    from .ext_assist import status as qc_status
+
+    rows = db.execute(select(AutoEdit, Form).join(Form, Form.id == AutoEdit.form_id).where(AutoEdit.status == "completed", form_scope_clause(db, user))
+                      .order_by(AutoEdit.id.desc()).limit(limit * 3)).all()
+    out = []
+    for ae, form in rows:
+        fw = (ae.stats or {}).get("forwarded")
+        if not fw:
+            continue
+        qc = qc_status(db, form).get("qc")
+        out.append({"proposal_id": ae.id, "form": {"id": form.id, "code": form.form_code}, "company": f"{form.project.client.name} / {form.project.name}",
+                    "by": fw.get("by"), "at": fw.get("at"), "note": fw.get("note"), "total": fw.get("total", 0), "accepted": fw.get("accepted", 0),
+                    "dismissed": fw.get("dismissed", 0), "reworded": fw.get("reworded", 0), "commented": fw.get("commented", 0),
+                    "added_by_human": fw.get("added_by_human", 0), "items": fw.get("items", []),
+                    "qc": {"status": qc["status"], "score": qc["score"], "findings": qc["findings"]} if qc else None})
+        if len(out) >= limit:
+            break
+    return out

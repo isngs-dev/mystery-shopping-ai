@@ -101,6 +101,7 @@ def test_company_rules_reach_the_ai_and_a_human_round_trip_ends_in_an_edited_pdf
     by_orig = {e["original"]: e for e in prop["edits"]}
     assert by_orig["The cashier greet me warmly"]["replacement"] == "The cashier greeted me warmly" and by_orig["The cashier greet me warmly"]["source"] == "ai"
     assert by_orig["recieved"]["replacement"] == "received" and by_orig["order,quickly"]["replacement"] == "order, quickly"       # built-in grammar rules
+    assert all("before" in e and "after" in e for e in prop["edits"]) and by_orig["recieved"]["before"].endswith("I") and by_orig["recieved"]["after"].startswith("my")   # the words around an edit
     assert all(e["raw_boxes"] and e["id"] for e in prop["edits"]) and prop["pages"][0]["width"] and prop["company"]["client"] == "Acme Retail"
     assert prop["company_check"]["company"] == "Acme Retail" and prop["company_check"]["matches_folder"] is True
     editor_prompts = [(s, u) for s, u in fake.prompts if "identify which client company" not in s]
@@ -118,8 +119,7 @@ def test_company_rules_reach_the_ai_and_a_human_round_trip_ends_in_an_edited_pdf
     # finalize: accept what is left (the built-in grammar edits)
     ids = [e["id"] for e in p2["edits"]]
     assert ids
-    assert call("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": p2["proposal_id"], "accepted": ids}).status_code == 403     # only the leader confirms
-    fin = leader("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": p2["proposal_id"], "accepted": ids})
+    fin = call("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": p2["proposal_id"], "accepted": ids, "note": "checked all"})   # whoever cross-checked forwards it
     assert fin.status_code == 202, fin.text
     out = fin.json()
     assert out["applied"] == len(ids) and out["version"] == 1 and out["qc_run_id"]
@@ -133,6 +133,11 @@ def test_company_rules_reach_the_ai_and_a_human_round_trip_ends_in_an_edited_pdf
     db.close()
     got = " ".join(p.text for p in extract_pdf(api("manager").get(f"/api/documents/{edited_id}/file").content).pages)
     assert "received" in got and "recieved" not in got and "order, quickly" in got and "greet me" in got          # the rejected edit was NOT applied
+    # the leader sees what the editor decided, and the QC result so far
+    fw = leader("GET", "/api/ext/forwarded").json()["items"]
+    assert len(fw) == 1 and fw[0]["form"]["code"] == "FORM050" and fw[0]["by"] == "QC" and fw[0]["accepted"] == len(ids) and fw[0]["note"] == "checked all"
+    assert fw[0]["dismissed"] == 0 and fw[0]["total"] == len(ids) and all(i["state"] == "accepted" for i in fw[0]["items"])
+    assert fw[0]["qc"]["status"] in ("completed", "completed_with_warnings") and call("GET", "/api/ext/forwarded").status_code == 403   # editors do not get the list
     # the proposal is closed: finalizing it again is refused
     assert leader("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": p2["proposal_id"], "accepted": ids}).status_code == 409
 
@@ -218,6 +223,10 @@ def test_cross_check_leader_confirmation_and_leader_rules(api, ctx):
     got = " ".join(p.text for p in extract_pdf(api("manager").get(f"/api/documents/{edited_id}/file").content).pages)
     assert "paid at the cash desk" in got and "paid at the counter" not in got                   # the human's own wording is what was typeset
     assert leader("GET", "/api/ext/review-queue").json()["items"] == []
+    fw = leader("GET", "/api/ext/forwarded").json()["items"]
+    assert len(fw) == 1 and fw[0]["dismissed"] == 1 and fw[0]["reworded"] == 1 and fw[0]["commented"] >= 1 and fw[0]["added_by_human"] == 1
+    reworded = next(i for i in fw[0]["items"] if i["state"] == "reworded")
+    assert reworded["ai"] == "paid at the till" and reworded["final"] == "paid at the cash desk"
     assert leader("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": pid, "accepted": []}).status_code == 409
 
 

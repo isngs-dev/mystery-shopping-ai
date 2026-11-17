@@ -94,13 +94,16 @@ class FinalizeIn(BaseModel):
     proposal_id: int
     accepted: list[str] = Field(default_factory=list, max_length=500)
     changes: dict[str, str] = Field(default_factory=dict)                   # the human's own wording per edit id
+    comments: dict[str, str] = Field(default_factory=dict)                  # comments typed on single edits (kept for the leader's summary)
+    note: str | None = Field(default=None, max_length=1000)
 
 
 @router.post("/forms/{form_id}/finalize", status_code=202)
-def finalize(form_id: int, body: FinalizeIn, user: User = Depends(needs("docs.ai_confirm")), db: Session = Depends(get_db)):
-    """Leader only: the edited PDF is created from the confirmed edits and the form moves on to QC."""
+def finalize(form_id: int, body: FinalizeIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """The person who cross-checked the AI's edits forwards the form: the edited PDF is created from the accepted edits and QC starts."""
     form = _guard(db, user, form_id)
-    return _run(lambda: ext_assist.finalize(db, form, user, proposal_id=body.proposal_id, accepted=body.accepted, changes=body.changes))
+    return _run(lambda: ext_assist.finalize(db, form, user, proposal_id=body.proposal_id, accepted=body.accepted, changes=body.changes,
+                                            comments=body.comments, note=body.note))
 
 
 @router.get("/forms/{form_id}/proposal")
@@ -161,6 +164,12 @@ def send_back(form_id: int, proposal_id: int, body: BackIn, user: User = Depends
 @router.get("/review-queue")
 def review_queue(user: User = Depends(needs("docs.ai_confirm")), db: Session = Depends(get_db)):
     return {"items": ext_review.queue(db, user)}
+
+
+@router.get("/forwarded")
+def forwarded(user: User = Depends(needs("docs.ai_confirm")), db: Session = Depends(get_db)):
+    """Leader: the forms that were cross-checked and forwarded to QC, with what the editor accepted, dismissed, reworded and commented."""
+    return {"items": ext_review.forwarded(db, user)}
 
 
 class RuleIn(BaseModel):

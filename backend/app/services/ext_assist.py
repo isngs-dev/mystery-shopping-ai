@@ -147,6 +147,12 @@ def identify(db: Session, user: User, *, drive_id: str | None, filename: str | N
 
 
 # ----------------------------------------------------------------------------------------------------- propose
+def edit_context(toks: list[Tok], i1: int, i2: int, n: int = 6) -> dict:
+    """The words around an edit (same page): lets the extension find the exact place in Drive's text layer when the same word occurs several times."""
+    page = toks[i1].page
+    return {"before": " ".join(t.text for t in toks[max(0, i1 - n):i1] if t.page == page), "after": " ".join(t.text for t in toks[i2:i2 + n] if t.page == page)}
+
+
 def _edit_id(o: auto_editor.EditOp) -> str:
     return hashlib.sha1(f"{o.i1}:{o.i2}:{o.replacement}".encode()).hexdigest()[:10]
 
@@ -250,7 +256,8 @@ def propose(db: Session, form: Form, user: User, *, feedback: str | None = None,
     ops = [o for o in ops if (o.original.strip().lower(), o.replacement.strip().lower()) not in rej_keys]
     skipped = rule_skipped + ai_skipped + overlap
     edits = [{"id": _edit_id(o), "page": o.page, "original": o.original, "replacement": o.replacement, "reason": o.reason, "category": o.category,
-              "confidence": round(o.confidence, 2), "source": o.source, "i1": o.i1, "i2": o.i2, "raw_boxes": boxes_for(toks, o.i1, o.i2)}
+              "confidence": round(o.confidence, 2), "source": o.source, "i1": o.i1, "i2": o.i2, "raw_boxes": boxes_for(toks, o.i1, o.i2),
+              **edit_context(toks, o.i1, o.i2)}
              for o in sorted(ops, key=lambda o: o.i1)]
 
     ae = db.get(AutoEdit, proposal_id) if proposal_id else None
@@ -306,14 +313,34 @@ def unsafe_replacement(original: str, repl: str) -> str | None:
 
 
 # ----------------------------------------------------------------------------------------------------- finalize
-def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted: list[str], changes: dict[str, str] | None = None) -> dict:
-    """Typeset the accepted edits into the edited PDF, verify it, store it as the next edited version and queue QC."""
+def forwarded_summary(ae: AutoEdit, user: User, wanted: set[str], changes: dict[str, str], comments: dict[str, str] | None, note: str | None) -> dict:
+    """What the person who cross-checked decided - kept so the leader can see it afterwards (accepted, dismissed, reworded, commented)."""
+    stored = (ae.stats or {}).get("comments") or {}
+    items = []
+    for e in ae.edits or []:
+        eid = e["id"]
+        final = changes.get(eid, "").strip() if eid in wanted else ""
+        said = [c["text"] for c in stored.get(eid, [])] + ([comments[eid].strip()] if comments and comments.get(eid, "").strip() else [])
+        state = "dismissed" if eid not in wanted else ("reworded" if final and final != e["replacement"] else "accepted")
+        items.append({"page": e["page"], "original": e["original"], "ai": e["replacement"], "final": final if state == "reworded" else e["replacement"],
+                      "source": e["source"], "state": state, "comments": said[:5]})
+    return {"by": user.name, "by_id": user.id, "at": utcnow().isoformat() + "Z", "note": (note or "").strip()[:1000] or None, "total": len(items),
+            "accepted": sum(1 for i in items if i["state"] != "dismissed"), "dismissed": sum(1 for i in items if i["state"] == "dismissed"),
+            "reworded": sum(1 for i in items if i["state"] == "reworded"), "commented": sum(1 for i in items if i["comments"]),
+            "added_by_human": sum(1 for i in items if i["source"] == "human" and i["state"] != "dismissed"), "items": items[:80]}
+
+
+def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted: list[str], changes: dict[str, str] | None = None,
+             comments: dict[str, str] | None = None, note: str | None = None) -> dict:
+    """Typeset the accepted edits into the edited PDF, verify it, store it as the next edited version and queue QC.
+    Whoever cross-checked the edits forwards the form; the leader sees what was decided under "Forwarded"."""
     ae = db.get(AutoEdit, proposal_id)
     if ae is None or ae.form_id != form.id or ae.status not in ("proposed", "awaiting_leader"):
         raise ExtError("This proposal is no longer open; propose the edits again.", 409)
     raw, toks = _prepare(db, form)
     wanted = set(accepted)
     changes = changes or {}
+    summary = forwarded_summary(ae, user, wanted, changes, comments, note)
     ops: list[auto_editor.EditOp] = []
     for e in ae.edits or []:
         if e["id"] not in wanted:
@@ -344,7 +371,7 @@ def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted:
     stored = workflow.latest_edited(form)
     if stored is not None and stored.sha256 == repository.sha256_of(out_bytes if applied else data):
         # These edits give exactly the edited PDF that is already stored: nothing new to store, the form's QC of that version is what counts.
-        return _reuse_stored(db, form, user, ae, stored, len(applied), verification)
+        return _reuse_stored(db, form, user, ae, stored, len(applied), verification, summary)
     try:
         res = repository.ingest_pdf(db, get_storage(), ai_user, project=form.project, form_code=form.form_code, kind="edited",
                                     original_filename=f"{form.form_code}_2.pdf", data=out_bytes if applied else data, note=note, is_sample=raw.is_sample)
@@ -357,7 +384,7 @@ def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted:
     ae.status, ae.finished_at, ae.message = "completed", utcnow(), (ae.message or "") + f" Reviewed by {user.name}."
     ae.edits = [{"page": o.page, "original": o.original, "replacement": o.replacement, "reason": o.reason, "category": o.category,
                  "confidence": round(o.confidence, 2), "source": o.source, **auto_editor._edit_boxes(toks, result_toks, o)} for o in sorted(applied, key=lambda o: o.i1)]
-    ae.stats = {**(ae.stats or {}), "applied": len(applied), "skipped": len(layout_skipped), "verification": verification, "accepted": len(wanted)}
+    ae.stats = {**(ae.stats or {}), "applied": len(applied), "skipped": len(layout_skipped), "verification": verification, "accepted": len(wanted), "forwarded": summary}
     audit(db, user, "ext.finalized", entity_type="auto_edit", entity_id=ae.id, form_id=form.id, project_id=form.project_id,
           detail={"applied": len(applied), "accepted": len(wanted), "document_id": doc.id})
     form = db.get(Form, form.id)
@@ -370,12 +397,12 @@ def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted:
             "qc_run_id": run.id}
 
 
-def _reuse_stored(db: Session, form: Form, user: User, ae: AutoEdit, stored: Document, applied: int, verification: str) -> dict:
+def _reuse_stored(db: Session, form: Form, user: User, ae: AutoEdit, stored: Document, applied: int, verification: str, summary: dict | None = None) -> dict:
     """The confirmed edits equal the edited PDF that is already stored (e.g. the Drive sync edited it the same way): keep it and make sure QC ran on it."""
     ae.result_document_id = stored.id
     ae.status, ae.finished_at = "completed", utcnow()
     ae.message = (ae.message or "") + f" Confirmed by {user.name}; same as the stored edited PDF v{stored.version_no}."
-    ae.stats = {**(ae.stats or {}), "applied": applied, "verification": verification, "reused_version": stored.version_no}
+    ae.stats = {**(ae.stats or {}), "applied": applied, "verification": verification, "reused_version": stored.version_no, "forwarded": summary}
     audit(db, user, "ext.finalized", entity_type="auto_edit", entity_id=ae.id, form_id=form.id, project_id=form.project_id,
           detail={"applied": applied, "document_id": stored.id, "reused": True})
     db.commit()

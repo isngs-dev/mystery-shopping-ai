@@ -132,7 +132,7 @@
     if (S.hideMarks) { S.hideMarks = false; badge.classList.remove('dim'); setPanel(true); layout(); return }   // brought back after ✕
     setPanel(wrap.classList.contains('hidden'))
   })
-  const queueBtn = el('button', { class: 'icon', title: 'Leader queue: forms waiting for your confirmation', style: 'display:none' }, '☰')
+  const queueBtn = el('button', { class: 'icon', title: 'Leader: forms editors forwarded to QC, and what they decided', style: 'display:none' }, '☰')
   queueBtn.addEventListener('click', () => showQueue())
   const diagBtn = el('button', { class: 'icon', title: 'Check: what the extension finds on this Drive page' }, '🔧')
   diagBtn.addEventListener('click', () => showDiagnostics())
@@ -295,8 +295,125 @@
   }
 
   const marks = new Map() // key -> element (element._e = the edit)
+
+  // ---- Drive's own text layer: the PDF's words exist as selectable text on the page, so an edit can be found by its words (+ the words around it)
+  let textIdx = null, textDirty = true, textBuilt = 0
+  const locs = new Map() // edit id -> {s:[node,offset], e:[node,offset]} | null
+  const usedHits = new Set() // a place in the text belongs to one edit only
+  new MutationObserver(() => { textDirty = true }).observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  function textIndex() {
+    if (textIdx && !textDirty) return textIdx
+    if (textIdx && Date.now() - textBuilt < 700) return textIdx
+    const nodes = [], starts = []
+    let text = ''
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const el0 = n.parentElement
+        if (!el0 || host.contains(el0) || /^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|OPTION)$/.test(el0.tagName) || !n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
+      },
+    })
+    while (walker.nextNode()) {
+      const n = walker.currentNode
+      starts.push(text.length)
+      nodes.push(n)
+      text += n.nodeValue.replace(/\s/g, ' ').toLowerCase() + ' '
+    }
+    textIdx = { text, nodes, starts }
+    textDirty = false
+    textBuilt = Date.now()
+    locs.clear()
+    usedHits.clear()
+    return textIdx
+  }
+  function pos(idx, at) {
+    let lo = 0, hi = idx.starts.length - 1
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (idx.starts[mid] <= at) lo = mid; else hi = mid - 1 }
+    return [idx.nodes[lo], Math.min(at - idx.starts[lo], idx.nodes[lo].nodeValue.length)]
+  }
+  const tail = (t, n) => t.trim().toLowerCase().split(/\s+/).filter(Boolean).slice(-n).join(' ')
+  const head = (t, n) => t.trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, n).join(' ')
+  /** Where in the text layer is this edit? The words must match; if they occur several times the words around them decide. */
+  function locate(idx, e) {
+    if (locs.has(e.id)) return locs.get(e.id)
+    const words = e.original.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    let found = null
+    if (words.length) {
+      const rx = new RegExp((/^\w/.test(words[0]) ? '(?<![a-z0-9])' : '') + words.map(esc).join('\\s+') + (/\w$/.test(words[words.length - 1]) ? '(?![a-z0-9])' : ''), 'g')
+      const hits = []
+      let m
+      while ((m = rx.exec(idx.text)) && hits.length < 40) {
+        const before = idx.text.slice(Math.max(0, m.index - 120), m.index).replace(/\s+/g, ' ')
+        const after = idx.text.slice(m.index + m[0].length, m.index + m[0].length + 120).replace(/\s+/g, ' ')
+        let score = 0
+        const bt = tail(e.before || '', 3), at = head(e.after || '', 3)
+        if (bt && before.trimEnd().endsWith(bt)) score += 2
+        if (at && after.trimStart().startsWith(at)) score += 2
+        hits.push({ index: m.index, len: m[0].length, score })
+      }
+      const total = hits.length
+      const free = hits.filter((h) => !usedHits.has(h.index)).sort((a, b) => b.score - a.score)
+      if (total === 1 && free.length === 1) found = free[0]
+      else if (free.length && free[0].score > 0 && (free.length === 1 || free[0].score > free[1].score)) found = free[0]
+      if (found) usedHits.add(found.index)
+    }
+    const loc = found ? { s: pos(idx, found.index), e: pos(idx, found.index + found.len - 1) } : null
+    if (loc) loc.e = [loc.e[0], Math.min(loc.e[1] + 1, loc.e[0].nodeValue.length)]
+    locs.set(e.id, loc)
+    return loc
+  }
+  function textRects(idx, e) {
+    const loc = locate(idx, e)
+    if (!loc || !loc.s[0].isConnected || !loc.e[0].isConnected) return null
+    try {
+      const r = document.createRange()
+      r.setStart(loc.s[0], loc.s[1])
+      r.setEnd(loc.e[0], loc.e[1])
+      return [...r.getClientRects()]
+    } catch (_) { return null }
+  }
+  function makeMark(key, e) {
+    let n = marks.get(key)
+    if (!n) {
+      n = el('div', { class: 'ul' })
+      n.addEventListener('mouseenter', () => showCard(n._e, n, false))
+      n.addEventListener('mouseleave', () => hideTipSoon())
+      n.addEventListener('click', () => showCard(n._e, n, false))
+      marks.set(key, n); layer.append(n)
+    }
+    n._e = e
+    n.className = `ul ${groupOf(e)}${e.accepted ? '' : ' off'}${S.flash === e.id ? ' flash' : ''}`
+    return n
+  }
+  /** Underlines from the text layer. True when at least one edit was found there (then the page-image method is not used). */
+  function textLayout(seen) {
+    const idx = textIndex()
+    if (!idx || !idx.nodes.length) return false
+    let located = false
+    for (const e of S.edits) {
+      if (S.filter !== 'all' && groupOf(e) !== S.filter) continue
+      const rects = textRects(idx, e)
+      if (!rects) continue
+      located = true
+      rects.forEach((r, i) => {
+        if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.top > innerHeight) return
+        const key = e.id + ':t' + i
+        seen.add(key)
+        const n = makeMark(key, e)
+        n.style.left = `${r.left}px`
+        n.style.top = `${r.top}px`
+        n.style.width = `${r.width}px`
+        n.style.height = `${r.height}px`
+      })
+    }
+    return located
+  }
+
   function layout() {
     if (!S.marks || !S.prop || S.hideMarks) { layer.replaceChildren(); marks.clear(); return }
+    const seenT = new Set()
+    if (textLayout(seenT)) { for (const [k, n] of marks) if (!seenT.has(k)) { n.remove(); marks.delete(k) } return }
     const pages = pageEls()
     const total = (S.prop.pages || []).length
     const usable = pages.length >= 1 && pages.length <= Math.max(total, 1) + 2   // do not guess on a page that shows something else
@@ -721,16 +838,12 @@
       addMissedCard(),
       el('details', { class: 'card', style: 'margin-top:12px' }, el('summary', {}, 'Comment for the whole form'), fb, el('div', { style: 'margin-top:8px' }, reedit),
         S.prop.feedback_history && S.prop.feedback_history.length ? el('div', { class: 'small muted', style: 'margin-top:8px' }, 'Your earlier comments:', el('ul', {}, S.prop.feedback_history.map((h) => el('li', {}, h.comment)))) : null),
-      S.caps.can_confirm ? null : card('', el('h3', {}, 'For the leader'), note),
+      card('', el('h3', {}, 'Note for the leader (optional)'), note),
       attentionCard(), companyCard())
-    if (S.caps.can_confirm) {
-      const go = el('button', { class: 'primary' }, `Confirm and create edited PDF + QC  (${accepted.length} edit${accepted.length === 1 ? '' : 's'})`)
+    {
+      const go = el('button', { class: 'primary' }, `Create edited PDF + QC  (${accepted.length} of ${S.edits.length} edits)`)
       go.addEventListener('click', finalize)
-      set(footEl, el('div', { class: 'small muted' }, 'You are the leader: confirming creates the edited PDF (RAW stays untouched) and sends this form to QC.'), go)
-    } else {
-      const go = el('button', { class: 'primary' }, `Send to the leader  (${accepted.length} of ${S.edits.length} edits)`)
-      go.addEventListener('click', submit)
-      set(footEl, el('div', { class: 'small muted' }, 'The leader sees your final edits and comments, confirms them, and the form moves on to QC.'), go)
+      set(footEl, el('div', { class: 'small muted' }, 'Creates the edited PDF from the edits you accepted (the RAW stays untouched) and sends this form to QC. The leader sees what you accepted, changed and commented.'), go)
     }
     S.marks = true
     setBadge()
@@ -805,7 +918,7 @@
     const ids = S.edits.filter((e) => e.accepted).map((e) => e.id)
     hideTip()
     busy('Creating the edited PDF…')
-    const r = await api('POST', `/api/ext/forms/${S.info.form.id}/finalize`, { proposal_id: S.prop.proposal_id, accepted: ids, changes: currentChanges() })
+    const r = await api('POST', `/api/ext/forms/${S.info.form.id}/finalize`, { proposal_id: S.prop.proposal_id, accepted: ids, changes: currentChanges(), comments: currentComments(), note: S.note || null })
     if (r.status === 401) return expired()
     if (!r.ok) { S.marks = true; render(); alert(r.error); return }
     S.result = r.data
@@ -848,7 +961,7 @@
     S.marks = false; layout(); hideTip()
     badgeN.textContent = '✓'; badgeN.classList.add('zero'); setPanel(true)
     set(bodyEl, card(qc && qc.status !== 'failed' ? 'ok' : 'warn', ...kids))
-    const next = S.caps.can_confirm ? el('button', {}, '☰ Next form in the queue') : null
+    const next = S.caps.can_confirm ? el('button', {}, '☰ Forwarded forms') : null
     if (next) next.addEventListener('click', showQueue)
     set(footEl, next)
   }
@@ -861,6 +974,8 @@
     lines.push(`file: ${S.file ? S.file.name : '-'} (drive id ${S.file && S.file.driveId ? 'yes' : 'no'})`)
     lines.push(`edits: ${S.edits.length} (pages ${[...new Set(S.edits.map((e) => e.page))].join(',') || '-'}), PDF pages: ${total}`)
     lines.push(`page images found: ${found.length} ${found.length ? '' : '<- none: underlines cannot be drawn'}`)
+    const ti = textIndex()
+    lines.push(`text layer: ${ti ? ti.nodes.length : 0} text pieces; edits found in it: ${ti ? S.edits.filter((e) => locate(ti, e)).length : 0} of ${S.edits.length}`)
     lines.push(`underlines drawn: ${marks.size}; pager page: ${pagerPage() || 'not found'}; auto cards: ${S.auto ? 'on' : 'off'}; cards shown so far: ${S.seen.size}`)
     lines.push(`iframes on the page: ${document.querySelectorAll('iframe').length}; scroll containers: ${[...document.querySelectorAll('div')].filter((d) => d.scrollHeight > d.clientHeight + 200 && /auto|scroll/.test(getComputedStyle(d).overflowY)).length}`)
     lines.push('--- largest picture-like elements ---')
@@ -887,22 +1002,29 @@
   // ------------------------------------------------------------------------------------------------ the leader's queue
   async function showQueue() {
     setPanel(true)
-    set(bodyEl, card('', el('span', { class: 'spin' }), 'Loading the forms that wait for you…'))
-    const r = await api('GET', '/api/ext/review-queue')
-    if (r.status === 401) return expired()
-    if (!r.ok) return fail(r.error, showQueue)
-    const items = r.data.items
-    const rows = items.map((it) => {
-      const here = S.info && S.info.form && it.form.id === S.info.form.id
+    set(bodyEl, card('', el('span', { class: 'spin' }), 'Loading the forwarded forms…'))
+    const [fw, wait] = await Promise.all([api('GET', '/api/ext/forwarded'), api('GET', '/api/ext/review-queue')])
+    if (fw.status === 401) return expired()
+    if (!fw.ok) return fail(fw.error, showQueue)
+    const waiting = wait.ok ? wait.data.items : []
+    const waitRows = waiting.map((it) => {
       const open = it.drive_id ? el('a', { href: `https://drive.google.com/file/d/${it.drive_id}/view`, target: '_blank', rel: 'noopener' }, 'Open in Drive') : null
-      const review = el('button', { style: 'padding:3px 12px;border-radius:999px;font-size:12px' }, 'Review here')
-      review.addEventListener('click', start)
+      return card('info', el('b', {}, it.form.code), el('span', { class: 'muted' }, '  ' + it.company),
+        el('div', { class: 'small' }, `${it.submitted_by || 'Editor'} sent it for your confirmation · ${it.accepted} accepted, ${it.dismissed} dismissed`), el('div', { class: 'acts' }, open))
+    })
+    const rows = fw.data.items.map((it) => {
+      const score = it.qc ? (it.qc.status === 'running' || it.qc.status === 'queued' ? 'QC running…' : `QC ${it.qc.score}/100 · ${it.qc.findings} finding${it.qc.findings === 1 ? '' : 's'}`) : 'QC not started'
+      const detail = el('details', {}, el('summary', { class: 'small' }, 'What was decided'),
+        el('ul', { class: 'small' }, it.items.map((i) => el('li', {}, el('b', {}, `p.${i.page} `), i.state === 'dismissed' ? el('span', {}, 'dismissed “', el('span', { class: 'del' }, i.original), '” → ', i.ai) : i.state === 'reworded'
+          ? el('span', {}, 'reworded: “', i.original, '” → AI “', i.ai, '” → final “', el('b', {}, i.final), '”') : el('span', {}, 'accepted “', i.original, '” → ', el('b', {}, i.final)),
+          ...(i.comments || []).map((c) => el('div', { class: 'said' }, c))))))
       return card('', el('b', {}, it.form.code), el('span', { class: 'muted' }, '  ' + it.company),
-        el('div', { class: 'small' }, `${it.submitted_by || 'Editor'} · ${it.accepted} accepted, ${it.dismissed} dismissed, ${it.reworded} reworded, ${it.commented} with comments`),
-        it.note ? el('div', { class: 'said', style: 'margin-top:4px' }, it.note) : null, el('div', { class: 'acts' }, here ? review : null, open))
+        el('div', { class: 'small' }, `${it.by} forwarded it · ${it.accepted} accepted, ${it.dismissed} dismissed, ${it.reworded} reworded, ${it.commented} with comments` + (it.added_by_human ? `, ${it.added_by_human} added by hand` : '')),
+        el('div', { class: 'small', style: 'font-weight:700' }, score), it.note ? el('div', { class: 'said', style: 'margin-top:4px' }, it.note) : null, detail)
     })
     S.marks = false; layout(); hideTip()
-    set(bodyEl, el('h3', {}, `Waiting for your confirmation (${items.length})`), items.length ? rows : card('ok', el('div', { class: 'small' }, 'Nothing is waiting. Forms the editors have cross-checked show up here.')))
+    set(bodyEl, waiting.length ? el('h3', {}, `Waiting for your confirmation (${waiting.length})`) : null, ...waitRows,
+      el('h3', {}, `Forwarded to QC (${fw.data.items.length})`), fw.data.items.length ? rows : card('ok', el('div', { class: 'small' }, 'Nothing yet. Forms that editors cross-check and forward from the extension appear here with what they decided.')))
     const back = el('button', {}, '← Back to this form')
     back.addEventListener('click', () => { if (S.prop) { S.marks = true; render() } else if (S.file) start() })
     set(footEl, back)
@@ -956,7 +1078,7 @@
     window.__msaiOpen = true
     if (S.file && S.file.name === file.name && S.file.driveId === file.driveId && S.prop) return
     S.hideMarks = false; badge.classList.remove('dim')
-    setPanel(false)                                                          // a Grammarly-like start: the badge + underlines first, the panel on a click
+    setPanel(true)                                                           // a RAW form opened in Drive: the panel opens at once and starts working
     S.file = file; S.info = null; S.prop = null; S.edits = []; S.rounds = 0; S.result = null; S.reviewMode = false; S.drafts = {}; S.comments = {}; S.expanded = new Set(); S.note = ''
     start()
   }
