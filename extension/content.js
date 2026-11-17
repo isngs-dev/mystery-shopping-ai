@@ -9,7 +9,18 @@
   if (window.__msaiPanel) return
   window.__msaiPanel = true
   const D = window.MSAI_DETECT
-  const send = (msg) => chrome.runtime.sendMessage(msg)
+  let dead = false
+  /** After the extension was reloaded, this tab's old copy cannot reach it any more: say so once, with the one thing to do. */
+  const send = async (msg) => {
+    if (dead) return { ok: false, error: 'The extension was updated. Refresh this Drive tab (F5).' }
+    try { return await chrome.runtime.sendMessage(msg) } catch (e) {
+      if (/context invalidated|receiving end does not exist/i.test(String((e && e.message) || e))) {
+        dead = true
+        try { set(bodyEl, card('warn', el('h3', {}, 'Extension updated'), el('div', { class: 'small' }, 'This tab still has the old version. Refresh this Drive tab (F5) and the panel comes back.'))); set(footEl); setPanel(true) } catch (_) { /* page is going away */ }
+      }
+      return { ok: false, error: 'The extension was updated. Refresh this Drive tab (F5).' }
+    }
+  }
   const api = (method, path, body, as) => send({ type: 'api', method, path, body, as })
 
   const GREEN = '#15a37f'
@@ -116,6 +127,8 @@
   })
   const queueBtn = el('button', { class: 'icon', title: 'Leader queue: forms waiting for your confirmation', style: 'display:none' }, '☰')
   queueBtn.addEventListener('click', () => showQueue())
+  const diagBtn = el('button', { class: 'icon', title: 'Check: what the extension finds on this Drive page' }, '🔧')
+  diagBtn.addEventListener('click', () => showDiagnostics())
   const autoBtn = el('button', { class: 'icon on', title: 'Pop-up cards while you scroll: on' }, '⚡')
   autoBtn.addEventListener('click', () => {
     S.auto = !S.auto
@@ -129,7 +142,7 @@
   closeBtn.addEventListener('click', () => { hideTip(); S.hideMarks = true; setPanel(false); badge.classList.add('dim'); layout() })
   const gear = el('button', { class: 'icon', title: 'Settings' }, '⚙')
   gear.addEventListener('click', () => send({ type: 'options' }))
-  wrap.append(el('header', {}, el('div', { class: 'logo' }, 'M'), el('div', { class: 'title' }, 'Mystery Shopping AI', subtitle), queueBtn, autoBtn, gear, minBtn, closeBtn), bodyEl, footEl)
+  wrap.append(el('header', {}, el('div', { class: 'logo' }, 'M'), el('div', { class: 'title' }, 'Mystery Shopping AI', subtitle), queueBtn, diagBtn, autoBtn, gear, minBtn, closeBtn), bodyEl, footEl)
   root.append(layer, wrap, badge)
 
   function el(tag, attrs = {}, ...kids) {
@@ -328,9 +341,39 @@
   }
 
   /** While scrolling: the edit nearest to the middle of the screen gets its card (once), so the page is edited top to bottom. */
+  /** The page number Drive's own pager shows ("Page [3] / 5"), for when the page images cannot be found. */
+  function pagerPage() {
+    const total = S.prop && S.prop.pages ? S.prop.pages.length : 0
+    if (!total) return null
+    const rx = new RegExp('/\\s*' + total + '\\b')
+    for (const inp of document.querySelectorAll('input')) {
+      if (host.contains(inp)) continue
+      const v = parseInt(inp.value, 10)
+      if (!(v >= 1 && v <= total)) continue
+      const box = inp.parentElement && inp.parentElement.parentElement
+      if (box && rx.test(box.textContent || '')) return v
+    }
+    return null
+  }
+  const fixedAnchor = { getBoundingClientRect: () => ({ left: 56, top: 150, right: 66, bottom: 160, width: 10, height: 10 }) }
+  let lastPager = null, lastFallback = 0
+  setInterval(() => { const p = S.marks && !marks.size ? pagerPage() : null; if (p && p !== lastPager) { lastPager = p; autoSoon(200) } }, 700)
+
+  /** No page images found (Drive draws the viewer differently): follow the pager instead - one card for the next edit on the page you are on. */
+  function autoFallback() {
+    const pg = pagerPage()
+    if (!pg || Date.now() - lastFallback < 2500) return
+    const e = S.edits.find((x) => x.page === pg && !S.seen.has(x.id))
+    if (!e) return
+    lastFallback = Date.now()
+    S.seen.add(e.id)
+    showCard(e, fixedAnchor, true)
+  }
+
   function autoCheck() {
-    if (!S.auto || !S.marks || S.hideMarks || !canAct() || !marks.size) return
+    if (!S.auto || !S.marks || S.hideMarks || !canAct()) return
     if (tip && tip.dataset.pinned === '1') return                           // the human is typing in a card
+    if (!marks.size) return autoFallback()
     let best = null, bestD = 1e9
     for (const n of marks.values()) {
       const r = n.getBoundingClientRect()
@@ -765,6 +808,37 @@
     const next = S.caps.can_confirm ? el('button', {}, '☰ Next form in the queue') : null
     if (next) next.addEventListener('click', showQueue)
     set(footEl, next)
+  }
+
+  // ------------------------------------------------------------------------------------------------ what the extension sees on this page
+  function diagnostics() {
+    const lines = []
+    const total = S.prop && S.prop.pages ? S.prop.pages.length : 0
+    const found = pageEls()
+    lines.push(`file: ${S.file ? S.file.name : '-'} (drive id ${S.file && S.file.driveId ? 'yes' : 'no'})`)
+    lines.push(`edits: ${S.edits.length} (pages ${[...new Set(S.edits.map((e) => e.page))].join(',') || '-'}), PDF pages: ${total}`)
+    lines.push(`page images found: ${found.length} ${found.length ? '' : '<- none: underlines cannot be drawn'}`)
+    lines.push(`underlines drawn: ${marks.size}; pager page: ${pagerPage() || 'not found'}; auto cards: ${S.auto ? 'on' : 'off'}; cards shown so far: ${S.seen.size}`)
+    lines.push(`iframes on the page: ${document.querySelectorAll('iframe').length}; scroll containers: ${[...document.querySelectorAll('div')].filter((d) => d.scrollHeight > d.clientHeight + 200 && /auto|scroll/.test(getComputedStyle(d).overflowY)).length}`)
+    lines.push('--- largest picture-like elements ---')
+    const cands = [...document.querySelectorAll('img,canvas,iframe,embed,object,svg')].filter((n) => !host.contains(n)).map((n) => ({ n, r: n.getBoundingClientRect() }))
+      .filter((x) => x.r.width >= 120 && x.r.height >= 120).sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height).slice(0, 8)
+    for (const { n, r } of cands) {
+      const src = n.tagName === 'IMG' ? (n.currentSrc || n.src || '').replace(/^(\w+:).*/, '$1') : ''
+      lines.push(`${n.tagName.toLowerCase()} ${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.left)},${Math.round(r.top)} ${src} class="${String(n.getAttribute('class') || '').slice(0, 50)}" aria="${String(n.getAttribute('aria-label') || '').slice(0, 30)}"`)
+    }
+    if (!cands.length) lines.push('(none)')
+    return lines.join('\n')
+  }
+  function showDiagnostics() {
+    setPanel(true)
+    const text = diagnostics()
+    const copy = el('button', {}, 'Copy this')
+    copy.addEventListener('click', () => { navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Copied' }) })
+    const back = el('button', {}, '← Back')
+    back.addEventListener('click', () => { if (S.prop) render(); else if (S.file) start() })
+    set(bodyEl, card('', el('h3', {}, 'What the extension sees on this page'), el('pre', { style: 'white-space:pre-wrap;font-size:11px;margin:0' }, text), el('div', { style: 'margin-top:8px' }, copy)))
+    set(footEl, back)
   }
 
   // ------------------------------------------------------------------------------------------------ the leader's queue
