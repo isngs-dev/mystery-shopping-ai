@@ -119,6 +119,8 @@ def identify(db: Session, user: User, *, drive_id: str | None, filename: str | N
                 break
     filename = re.sub(r"^(?:PDF|Image)(?:\s*:\s*|\s+|(?=\d))", "", (filename or "").strip(), flags=re.I)        # Drive's own file-type label is not part of the name
     code, number = (parse_pdf_name(filename or "") or (None, None))
+    if form is not None and code and form.form_code.upper() != code.upper():
+        form, raw_doc = None, None                       # the Drive id and the file name disagree (the viewer moved to another file): trust the name
     if form is None and code:
         cands = db.execute(select(Form).where(Form.form_code == code, form_scope_clause(db, user))).scalars().all()
         if len(cands) == 1:
@@ -339,6 +341,10 @@ def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted:
     ai_user = auto_editor.get_ai_editor(db)
     note = (f"AI edit reviewed by {user.name} in the extension: {len(applied)} correction(s) accepted, round {(ae.stats or {}).get('rounds', 1)}."
             if applied else f"RAW submitted unchanged for QC after review by {user.name} (no correction accepted).")
+    stored = workflow.latest_edited(form)
+    if stored is not None and stored.sha256 == repository.sha256_of(out_bytes if applied else data):
+        # These edits give exactly the edited PDF that is already stored: nothing new to store, the form's QC of that version is what counts.
+        return _reuse_stored(db, form, user, ae, stored, len(applied), verification)
     try:
         res = repository.ingest_pdf(db, get_storage(), ai_user, project=form.project, form_code=form.form_code, kind="edited",
                                     original_filename=f"{form.form_code}_2.pdf", data=out_bytes if applied else data, note=note, is_sample=raw.is_sample)
@@ -362,6 +368,26 @@ def finalize(db: Session, form: Form, user: User, *, proposal_id: int, accepted:
     jobs.submit(pipeline.run_job, run.id)
     return {"document_id": doc.id, "version": doc.version_no, "applied": len(applied), "skipped": layout_skipped[:40], "verification": verification,
             "qc_run_id": run.id}
+
+
+def _reuse_stored(db: Session, form: Form, user: User, ae: AutoEdit, stored: Document, applied: int, verification: str) -> dict:
+    """The confirmed edits equal the edited PDF that is already stored (e.g. the Drive sync edited it the same way): keep it and make sure QC ran on it."""
+    ae.result_document_id = stored.id
+    ae.status, ae.finished_at = "completed", utcnow()
+    ae.message = (ae.message or "") + f" Confirmed by {user.name}; same as the stored edited PDF v{stored.version_no}."
+    ae.stats = {**(ae.stats or {}), "applied": applied, "verification": verification, "reused_version": stored.version_no}
+    audit(db, user, "ext.finalized", entity_type="auto_edit", entity_id=ae.id, form_id=form.id, project_id=form.project_id,
+          detail={"applied": applied, "document_id": stored.id, "reused": True})
+    db.commit()
+    form = db.get(Form, form.id)
+    run = workflow.current_run(db, form)
+    if run is None or run.status == "failed":
+        run = pipeline.create_run(db, form, db.get(Document, stored.id), None)
+        from . import jobs
+
+        jobs.submit(pipeline.run_job, run.id)
+    return {"document_id": stored.id, "version": stored.version_no, "applied": applied, "skipped": [], "qc_run_id": run.id, "reused": True,
+            "verification": f"Same as the edited PDF already stored as v{stored.version_no}; it is not stored again. QC of that version applies. " + verification}
 
 
 # ----------------------------------------------------------------------------------------------------- status

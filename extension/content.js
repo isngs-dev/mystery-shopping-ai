@@ -716,7 +716,19 @@
   }
 
   // ------------------------------------------------------------------------------------------------ hand-over and confirmation
+  /** The panel belongs to one file; if the viewer moved on to another, nothing is sent for the wrong form. */
+  function sameFileOpen() {
+    const cf = currentFile()
+    if (cf && S.file && cf.name !== S.file.name) {
+      alert(`The file open in Drive is now “${cf.name}”, but this panel is for “${S.file.name}”. The panel is reloading for the open file; nothing was sent.`)
+      open(cf, false)
+      return false
+    }
+    return true
+  }
+
   async function submit() {
+    if (!sameFileOpen()) return
     const ids = S.edits.filter((e) => e.accepted).map((e) => e.id)
     hideTip()
     busy('Sending your final edits to the leader…')
@@ -766,6 +778,7 @@
   }
 
   async function finalize() {
+    if (!sameFileOpen()) return
     const ids = S.edits.filter((e) => e.accepted).map((e) => e.id)
     hideTip()
     busy('Creating the edited PDF…')
@@ -884,7 +897,9 @@
       const t = (n.textContent || '').trim()
       if (t.length < 5 || t.length > 120 || !/\.pdf$/i.test(t)) continue
       const r = n.getBoundingClientRect()
-      if (r.top >= 0 && r.top < 130 && r.width > 0 && D.parseName(cleanName(t))) return cleanName(t)
+      if (!(r.top >= 0 && r.top < 130 && r.width > 0 && D.parseName(cleanName(t)))) continue
+      const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 40), r.top + r.height / 2)       // the list rows under the preview are covered, the header is not
+      if (hit && (n.contains(hit) || hit.contains(n))) return cleanName(t)
     }
     return null
   }
@@ -897,7 +912,10 @@
     const sel = document.querySelector('[data-id][aria-selected="true"]')
     const rowId = sel ? sel.getAttribute('data-id') : null
     const header = nameFromPreviewHeader()
-    if (header) return { name: header, driveId: rowId }
+    if (header) {
+      const rowText = sel ? (sel.getAttribute('aria-label') || sel.textContent || '') : ''
+      return { name: header, driveId: rowText.includes(header) ? rowId : null }       // arrows inside the preview change the file but not the selected row
+    }
     if (sel) {
       const label = sel.getAttribute('data-tooltip') || sel.getAttribute('aria-label') || sel.textContent || ''
       const m = cleanName(label).match(/(.*?\.pdf)/i)
@@ -923,10 +941,11 @@
 
   let last = ''
   every(() => {
-    const key = location.href + '|' + document.title
+    const cf = currentFile()
+    const key = location.href + '|' + document.title + '|' + (cf ? cf.name : '')
     if (key === last) return
     last = key
-    open(currentFile(), false)
+    open(cf, false)
   }, 1000)
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === 'open-panel') {            // toolbar button: always brings the panel back

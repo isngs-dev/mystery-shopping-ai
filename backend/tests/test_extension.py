@@ -146,6 +146,10 @@ def test_without_an_ai_model_the_built_in_grammar_rules_still_work_and_access_is
     # nothing accepted: the RAW is submitted unchanged for QC
     fin = _auth(_token("manager"))("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": prop["proposal_id"], "accepted": []}).json()
     assert fin["applied"] == 0 and "unchanged" in fin["verification"]
+    # confirming edits that give exactly the PDF that is already stored does not fail: the stored version is kept and its QC applies
+    again = call("POST", f"/api/ext/forms/{form_id}/propose", json={}).json()
+    same = _auth(_token("manager"))("POST", f"/api/ext/forms/{form_id}/finalize", json={"proposal_id": again["proposal_id"], "accepted": []})
+    assert same.status_code == 202 and same.json()["reused"] is True and same.json()["version"] == fin["version"] and "already stored" in same.json()["verification"]
     # an editor with no access to the project cannot touch the form
     other = _auth(_token("editor2"))
     assert other("POST", f"/api/ext/forms/{form_id}/propose", json={}).status_code in (403, 404)
