@@ -553,7 +553,18 @@
     return D.diffWords(e.original, e.replacement).map((w) => (w.t === 'same' ? document.createTextNode(w.w + ' ') : el('span', { class: w.t }, w.w + ' ')))
   }
 
+  const log = []
+  const note = (t) => { log.push(new Date().toLocaleTimeString() + ' ' + t); if (log.length > 14) log.shift() }
   function showCard(e, anchor, auto) {
+    try { showCard0(e, anchor, auto); note(`card shown (${auto ? 'auto' : 'hover'}): ${e.original.slice(0, 24)}`) } catch (err) {
+      note('card error: ' + (err && err.message))
+      setPanel(true)
+      const old = bodyEl.querySelector('.cardfail')
+      if (old) old.remove()
+      bodyEl.prepend(el('div', { class: 'card err cardfail' }, el('b', {}, 'The pop-up card could not be drawn on this page. '), String((err && err.message) || err)))
+    }
+  }
+  function showCard0(e, anchor, auto) {
     clearTimeout(tipTimer)
     if (!canAct() && auto) return
     if (tip && tip.dataset.id === e.id) { if (!auto) tip.dataset.auto = tip.dataset.auto; return }
@@ -587,14 +598,26 @@
     tip.addEventListener('mouseleave', hideTipSoon)
     tip.addEventListener('focusin', () => { tip.dataset.pinned = '1' })
     root.append(tip)
-    const r = anchor.getBoundingClientRect()
+    placeCard(anchor)
+  }
+
+  /** Next to the underline when that is on screen; otherwise docked at the bottom-left of the screen, so the card is always seen. */
+  function placeCard(anchor) {
     const w = 330
     const limit = innerWidth - (wrap.classList.contains('hidden') ? 0 : 380) - 12
-    const left = Math.max(8, Math.min(limit - w, r.left))
     const h = tip.offsetHeight
-    const below = r.bottom + 8 + h < innerHeight
-    tip.style.left = left + 'px'
-    tip.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px'
+    const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null
+    const onScreen = r && r.bottom > 0 && r.top < innerHeight - 40 && r.right > 0 && r.left < limit
+    if (onScreen && anchor !== fixedAnchor) {
+      const below = r.bottom + 8 + h < innerHeight
+      tip.style.left = Math.max(8, Math.min(limit - w, r.left)) + 'px'
+      tip.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px'
+    } else {
+      tip.style.left = '24px'
+      tip.style.top = Math.max(60, innerHeight - h - 24) + 'px'
+    }
+    const t = tip.getBoundingClientRect()
+    if (!t.width || t.right < 0 || t.left > innerWidth || t.bottom < 0 || t.top > innerHeight) { tip.style.left = '24px'; tip.style.top = '80px' }
   }
 
   /** "Review one by one": the edits one after the other, each with its card. Works even when the underlines cannot be drawn on Drive's viewer. */
@@ -606,8 +629,10 @@
     hideTip()
     const n = [...marks.values()].find((m) => m._e.id === e.id)
     S.seen.add(e.id)
+    note(`tour ${S.tourIdx + 1}/${S.edits.length}: underline ${n ? 'found' : 'not found'}`)
     if (n) { focusSuggestion(e); setTimeout(() => { const m = [...marks.values()].find((x) => x._e.id === e.id); showCard(e, m || fixedAnchor, true) }, 450) }
     else { setPanel(true); togglePreview(e, true); showCard(e, fixedAnchor, true) }        // no underline to point at: the panel shows the page with the place marked
+    setTimeout(() => { if (S.tour && !tip) { note('tour: no card after 1.2 s, showing it docked'); showCard(e, fixedAnchor, true) } }, 1200)
   }
 
   /** Scroll the page to this edit's place and flash it. */
@@ -978,6 +1003,7 @@
     lines.push(`text layer: ${ti ? ti.nodes.length : 0} text pieces; edits found in it: ${ti ? S.edits.filter((e) => locate(ti, e)).length : 0} of ${S.edits.length}`)
     lines.push(`underlines drawn: ${marks.size}; pager page: ${pagerPage() || 'not found'}; auto cards: ${S.auto ? 'on' : 'off'}; cards shown so far: ${S.seen.size}`)
     lines.push(`iframes on the page: ${document.querySelectorAll('iframe').length}; scroll containers: ${[...document.querySelectorAll('div')].filter((d) => d.scrollHeight > d.clientHeight + 200 && /auto|scroll/.test(getComputedStyle(d).overflowY)).length}`)
+    lines.push('--- last events ---', ...(log.length ? log : ['(none)']))
     lines.push('--- largest picture-like elements ---')
     const cands = [...document.querySelectorAll('img,canvas,iframe,embed,object,svg')].filter((n) => !host.contains(n)).map((n) => ({ n, r: n.getBoundingClientRect() }))
       .filter((x) => x.r.width >= 120 && x.r.height >= 120).sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height).slice(0, 8)
