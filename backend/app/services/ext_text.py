@@ -23,7 +23,8 @@ WORD = re.compile(r"\S+")
 
 
 def _key(s: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", s.lower())
+    """Letters and digits only, doubled letters collapsed ("Intelishop" matches "intelli-shop.com")."""
+    return re.sub(r"(.)\1+", r"\1", re.sub(r"[^a-z0-9]", "", s.lower()))
 
 
 def match_client(db: Session, hint: str | None, client_id: int | None = None) -> dict | None:

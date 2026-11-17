@@ -277,6 +277,8 @@ def test_text_form_edits_for_a_web_page_form_with_character_positions(api, ctx):
         ai = next(e for e in out["edits"] if e["source"] == "ai")
         assert a1[ai["start"]:ai["end"]] == ai["original"] and ai["replacement"].startswith("The cashier greeted")
         assert all(e["qid"] in ("306378", "302694") for e in out["edits"])
+        by_site = call("POST", "/api/ext/text/propose", json={**body, "client_hint": "Master Form | acme-retail.com"}).json()
+        assert by_site["company"]["client"] == "Acme Retail"                                           # the site name also names the client
         none = call("POST", "/api/ext/text/propose", json={**body, "client_hint": "Unknown Brand"}).json()
         assert none["company"] is None
         assert _auth("bad")("POST", "/api/ext/text/propose", json=body).status_code == 401

@@ -137,7 +137,8 @@
   }
   function clientHint() {
     const h = document.querySelector('.white16bold')
-    return (h ? h.textContent : document.title).replace(/\s+/g, ' ').trim().slice(0, 200)
+    // the form's name ("Love's: T-Stop") and the site ("cxeview.com" -> client CXE): the server matches either with the platform's clients
+    return ((h ? h.textContent : document.title).replace(/\s+/g, ' ').trim().slice(0, 200) + ' | ' + location.hostname.replace(/^www\./, ''))
   }
 
   // ------------------------------------------------------------------------------------------------ sign in / check
