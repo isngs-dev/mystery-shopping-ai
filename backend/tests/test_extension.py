@@ -67,6 +67,8 @@ def test_login_roles_and_identify_by_file_name(api, ctx):
     out = call("POST", "/api/ext/identify", json={"filename": "FORM050_1.pdf"}).json()
     assert out["found"] and out["form"]["id"] == form_id and out["company"]["client"] == "Acme Retail" and out["company"]["project"] == "Store Visits"
     assert out["is_raw"] is True and any(r["key"] == "GEN-SPELL" for r in out["rules"]) and out["ai"]["usable"] is False
+    assert call("POST", "/api/ext/identify", json={"filename": "PDFFORM050_1.pdf"}).json()["found"] is False       # a real code that merely starts with PDF is left alone
+    assert call("POST", "/api/ext/identify", json={"filename": "PDF FORM050_1.pdf"}).json()["form"]["id"] == form_id   # Drive's "PDF " label in front of the name is dropped
     unknown = call("POST", "/api/ext/identify", json={"filename": "9999999_1.pdf"}).json()
     assert unknown["found"] is False and "not in the platform yet" in unknown["message"]
 

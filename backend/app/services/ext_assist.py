@@ -117,6 +117,7 @@ def identify(db: Session, user: User, *, drive_id: str | None, filename: str | N
                 raw_doc = db.get(Document, row.document_id)
                 form = raw_doc.form if raw_doc else None
                 break
+    filename = re.sub(r"^(?:PDF|Image)(?:\s*:\s*|\s+|(?=\d))", "", (filename or "").strip(), flags=re.I)        # Drive's own file-type label is not part of the name
     code, number = (parse_pdf_name(filename or "") or (None, None))
     if form is None and code:
         cands = db.execute(select(Form).where(Form.form_code == code, form_scope_clause(db, user))).scalars().all()
