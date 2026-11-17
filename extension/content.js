@@ -451,10 +451,41 @@
     }
     for (const [k, n] of marks) if (!seen.has(k)) { n.remove(); marks.delete(k) }
   }
-  every(layout, 350)
+  every(() => { layout(); trackCard() }, 350)
   let autoTimer = null
   const autoSoon = (ms) => { clearTimeout(autoTimer); autoTimer = setTimeout(autoCheck, ms || 280) }
-  addEventListener('scroll', () => { layout(); autoSoon() }, true)
+  const scrollPos = new WeakMap()
+  /** The card scrolls with the page: next to its underline it follows the underline; a card without a located place moves by the same distance the page moved. */
+  function followScroll(ev) {
+    const t = ev.target === document || !ev.target ? document.scrollingElement : ev.target
+    if (!t || t.scrollTop === undefined) return
+    const prev = scrollPos.get(t)
+    scrollPos.set(t, t.scrollTop)
+    if (prev === undefined || !tip || !tip._follow || S.tour) return
+    if (t !== document.scrollingElement && t.clientHeight < innerHeight * 0.4) return          // a small box inside the page (a list, a text area), not the PDF
+    const dy = t.scrollTop - prev
+    if (!dy) return
+    const top = parseFloat(tip.style.top) - dy
+    tip.style.top = top + 'px'
+    if (top + tip.offsetHeight < 0 || top > innerHeight) hideTip()                                // scrolled out of sight: the next edit gets its own card
+  }
+  /** Remember where the page's scrollers are now, so the first scroll after a card appears already moves the card. */
+  function primeScrollers() {
+    if (document.scrollingElement) scrollPos.set(document.scrollingElement, document.scrollingElement.scrollTop)
+    for (const d of document.querySelectorAll('div')) {
+      if (host.contains(d) || d.clientHeight < innerHeight * 0.4 || d.scrollHeight <= d.clientHeight + 200) continue
+      if (/auto|scroll/.test(getComputedStyle(d).overflowY)) scrollPos.set(d, d.scrollTop)
+    }
+  }
+  function trackCard() {
+    if (!tip || tip._follow || S.tour) return
+    const a = tip._anchor
+    if (!a || a === fixedAnchor || !a.isConnected) return
+    const r = a.getBoundingClientRect()
+    if (r.bottom < 0 || r.top > innerHeight) { if (tip.dataset.auto === '1') hideTip(); return }
+    placeCard(a)
+  }
+  addEventListener('scroll', (ev) => { followScroll(ev); layout(); trackCard(); autoSoon() }, true)
   addEventListener('resize', layout)
 
   // ------------------------------------------------------------------------------------------------ cards on the page (hover / scroll)
@@ -622,9 +653,16 @@
       const below = r.bottom + 8 + h < innerHeight
       tip.style.left = Math.max(8, Math.min(limit - w, r.left)) + 'px'
       tip.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px'
-    } else {
-      tip.style.left = '24px'
+      tip._follow = false
+    } else if (S.tour) {
+      tip.style.left = '24px'                                                  // the tour keeps its card still, bottom-left
       tip.style.top = Math.max(60, innerHeight - h - 24) + 'px'
+      tip._follow = false
+    } else {
+      tip.style.left = '24px'                                                  // place not known: the card sits in the upper part of the page and scrolls away with it
+      tip.style.top = Math.max(60, Math.min(Math.round(innerHeight * 0.28), innerHeight - h - 24)) + 'px'
+      tip._follow = true
+      primeScrollers()
     }
     const t = tip.getBoundingClientRect()
     if (!t.width || t.right < 0 || t.left > innerWidth || t.bottom < 0 || t.top > innerHeight) { tip.style.left = '24px'; tip.style.top = '80px' }
