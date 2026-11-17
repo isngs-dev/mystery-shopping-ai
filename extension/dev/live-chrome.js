@@ -12,6 +12,7 @@
       async remove(keys) { for (const k of keys) delete store[k]; persist() },
     } },
     runtime: {
+      id: 'dev-preview',
       onMessage: { addListener(fn) { listeners.push(fn) } },
       openOptionsPage() { alert('Options page: server address is set to ' + location.origin + ' in this dev preview.') },
       sendMessage(msg) {

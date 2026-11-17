@@ -21,6 +21,7 @@
   const ok = (data) => Promise.resolve({ ok: true, status: 200, data })
   window.chrome = {
     runtime: {
+      id: 'dev-preview',
       onMessage: { addListener() {} },
       sendMessage(msg) {
         if (msg.type === 'session') return Promise.resolve({ ok: true, server: 'https://mystery-shopping-ai.onrender.com', user: { name: 'Devansh', role: 'qc_reviewer' } })

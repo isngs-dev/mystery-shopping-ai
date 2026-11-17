@@ -10,14 +10,21 @@
   window.__msaiPanel = true
   const D = window.MSAI_DETECT
   let dead = false
-  /** After the extension was reloaded, this tab's old copy cannot reach it any more: say so once, with the one thing to do. */
+  const timers = []
+  const alive = () => { try { return !!(chrome.runtime && chrome.runtime.id) } catch (e) { return false } }
+  /** Every timer of this copy runs through here: once the extension was reloaded the old copy stops quietly instead of throwing errors. */
+  const every = (fn, ms) => { timers.push(setInterval(() => { if (!alive()) return gone(); fn() }, ms)) }
+  /** After the extension was reloaded, this tab's old copy cannot reach it any more: stop, and say so once with the one thing to do. */
+  function gone() {
+    if (dead) return
+    dead = true
+    timers.forEach(clearInterval)
+    try { set(bodyEl, card('warn', el('h3', {}, 'Extension updated'), el('div', { class: 'small' }, 'This tab still has the old version. Refresh this Drive tab (F5) and the panel comes back.'))); set(footEl); setPanel(true) } catch (_) { /* page is going away */ }
+  }
   const send = async (msg) => {
-    if (dead) return { ok: false, error: 'The extension was updated. Refresh this Drive tab (F5).' }
+    if (dead || !alive()) { gone(); return { ok: false, error: 'The extension was updated. Refresh this Drive tab (F5).' } }
     try { return await chrome.runtime.sendMessage(msg) } catch (e) {
-      if (/context invalidated|receiving end does not exist/i.test(String((e && e.message) || e))) {
-        dead = true
-        try { set(bodyEl, card('warn', el('h3', {}, 'Extension updated'), el('div', { class: 'small' }, 'This tab still has the old version. Refresh this Drive tab (F5) and the panel comes back.'))); set(footEl); setPanel(true) } catch (_) { /* page is going away */ }
-      }
+      if (/context invalidated|receiving end does not exist/i.test(String((e && e.message) || e))) gone()
       return { ok: false, error: 'The extension was updated. Refresh this Drive tab (F5).' }
     }
   }
@@ -327,7 +334,7 @@
     }
     for (const [k, n] of marks) if (!seen.has(k)) { n.remove(); marks.delete(k) }
   }
-  const layoutTimer = setInterval(layout, 350)
+  every(layout, 350)
   let autoTimer = null
   const autoSoon = (ms) => { clearTimeout(autoTimer); autoTimer = setTimeout(autoCheck, ms || 280) }
   addEventListener('scroll', () => { layout(); autoSoon() }, true)
@@ -357,7 +364,7 @@
   }
   const fixedAnchor = { getBoundingClientRect: () => ({ left: 56, top: 150, right: 66, bottom: 160, width: 10, height: 10 }) }
   let lastPager = null, lastFallback = 0
-  setInterval(() => { const p = S.marks && !marks.size ? pagerPage() : null; if (p && p !== lastPager) { lastPager = p; autoSoon(200) } }, 700)
+  every(() => { const p = S.marks && !marks.size ? pagerPage() : null; if (p && p !== lastPager) { lastPager = p; autoSoon(200) } }, 700)
 
   /** No page images found (Drive draws the viewer differently): follow the pager instead - one card for the next edit on the page you are on. */
   function autoFallback() {
@@ -915,7 +922,7 @@
   function show(text) { if (!host.isConnected) document.documentElement.appendChild(host); setPanel(true); set(bodyEl, card('warn', text)); set(footEl) }
 
   let last = ''
-  setInterval(() => {
+  every(() => {
     const key = location.href + '|' + document.title
     if (key === last) return
     last = key
