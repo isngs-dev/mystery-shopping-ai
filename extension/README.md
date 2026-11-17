@@ -58,7 +58,7 @@ Things the editor sees but must not change alone (unbalanced quotation marks, st
 Without a model only the built-in rules above run: they cannot rewrite a sentence.
 
 ## Intelli-Shop shop review pages (HTML website)
-On `*.intelli-shop.com` the extension (`intellishop.js`) reads the shop review page (`ShopReview-Right.php?JobID=…`): every question with a text box
+On `*.intelli-shop.com` and `*.cxeview.com` (same software) the extension (`intellishop.js`) reads the shop review page (`ShopReview-Right.php?JobID=…`): every question with a text box
 (`textarea[name="Q[id]"]`) is an answer. The client comes from the page header (`.white16bold`, for example "Love's: T-Stop") and is matched with the
 platform's clients; the answers go to `POST /api/ext/text/propose` (same editor, rules, safety policy and question awareness as for PDFs).
 Edits are underlined inside the boxes; a card pops up at the edit while you scroll and moves with it (hover an underline for its card): who suggests it,
