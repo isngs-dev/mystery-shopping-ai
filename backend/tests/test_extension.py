@@ -257,3 +257,28 @@ def test_ai_recognises_another_client_and_the_human_switches_the_rules(api, ctx)
     switched = call("POST", f"/api/ext/forms/{form_id}/propose", json={"proposal_id": prop["proposal_id"], "client_id": other_id}).json()
     assert any(r["key"] == "OTHER-TERMS" for r in switched["rules"]) and switched["client_id"] == other_id
     assert "Say customer not guest" in [u for s_, u in fake.prompts if "identify which client company" not in s_][-1]
+
+
+def test_text_form_edits_for_a_web_page_form_with_character_positions(api, ctx):
+    """Intelli-Shop style page: questions + answers in, edits with character ranges inside each answer out; the client comes from the page header."""
+    prov = RoutingProvider()
+    set_provider_override(prov)
+    try:
+        call = _auth(_token("qc"))
+        a1 = "The cashier greet me warmly at the door.\nI recieved my order,quickly."
+        a2 = "The store was clean."
+        body = {"client_hint": "Acme Retail: Store 978 - Carlin NV", "answers": [
+            {"id": "306378", "question": "Describe the greeting", "text": a1}, {"id": "302694", "question": "Outside comments", "text": a2}]}
+        out = call("POST", "/api/ext/text/propose", json=body).json()
+        assert out["company"]["client"] == "Acme Retail" and out["company"]["matched_by"] == "page header"
+        assert any("QUESTION: Describe the greeting" in u for _, u in prov.prompts)                  # the model sees the form's own question
+        by = {e["original"]: e for e in out["edits"]}
+        assert "recieved" in by and by["recieved"]["qid"] == "306378" and a1[by["recieved"]["start"]:by["recieved"]["end"]] == "recieved"
+        ai = next(e for e in out["edits"] if e["source"] == "ai")
+        assert a1[ai["start"]:ai["end"]] == ai["original"] and ai["replacement"].startswith("The cashier greeted")
+        assert all(e["qid"] in ("306378", "302694") for e in out["edits"])
+        none = call("POST", "/api/ext/text/propose", json={**body, "client_hint": "Unknown Brand"}).json()
+        assert none["company"] is None
+        assert _auth("bad")("POST", "/api/ext/text/propose", json=body).status_code == 401
+    finally:
+        set_provider_override(None)

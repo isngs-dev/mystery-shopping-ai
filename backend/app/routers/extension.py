@@ -11,7 +11,7 @@ from ..deps import get_current_user, needs
 from ..models import Form, User
 from ..permissions import get_form_or_404, has_perm
 from ..security import create_token
-from ..services import ext_assist, ext_review
+from ..services import ext_assist, ext_review, ext_text
 from ..services.ai import resolve_provider
 from . import auth as auth_router
 
@@ -69,6 +69,31 @@ class ProposeIn(BaseModel):
     proposal_id: int | None = None
     client_id: int | None = None                                           # the human switched the form to another client's rules
     item_feedback: list[dict] = Field(default_factory=list, max_length=60)  # comments on single edits: {id, original, replacement, comment}
+
+
+class AnswerIn(BaseModel):
+    id: str = Field(max_length=60)
+    question: str = Field(default="", max_length=600)
+    text: str = Field(max_length=8000)
+
+
+class TextProposeIn(BaseModel):
+    """A form that is a web page (Intelli-Shop shop review): the questions with the shopper's answers, and the header text that names the client."""
+    answers: list[AnswerIn] = Field(max_length=120)
+    client_hint: str | None = Field(default=None, max_length=300)
+    client_id: int | None = None
+    feedback: str | None = Field(default=None, max_length=3000)
+    rejected: list[dict] = Field(default_factory=list, max_length=100)
+    item_feedback: list[dict] = Field(default_factory=list, max_length=60)
+
+
+@router.post("/text/propose")
+def propose_text(body: TextProposeIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """Edits for the answers of a web-page form. Stateless: nothing is stored or written; the page shows the edits and the person decides."""
+    if sum(len(a.text) for a in body.answers) > 90000:
+        raise HTTPException(413, "This form has too much text for one check.")
+    return ext_text.propose_text(db, answers=[a.model_dump() for a in body.answers], client_hint=body.client_hint, client_id=body.client_id,
+                                 feedback=body.feedback, rejected=body.rejected, item_feedback=body.item_feedback)
 
 
 def _guard(db: Session, user: User, form_id: int):

@@ -5,11 +5,12 @@
   "description": "Opens next to a RAW form in Google Drive, identifies its company, applies that company's grammar rules, lets you cross-check the edits, and creates the edited PDF with QC.",
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "permissions": ["storage"],
-  "host_permissions": ["https://drive.google.com/*", "http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://mystery-shopping-ai.onrender.com/*"],
+  "host_permissions": ["https://drive.google.com/*", "https://*.intelli-shop.com/*","http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://mystery-shopping-ai.onrender.com/*"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
-    { "matches": ["https://drive.google.com/*"], "js": ["lib/detect.js", "content.js"], "run_at": "document_idle" }
+    { "matches": ["https://drive.google.com/*"], "js": ["lib/detect.js", "content.js"], "run_at": "document_idle" },
+    { "matches": ["https://*.intelli-shop.com/*"], "js": ["intellishop.js"], "run_at": "document_idle" }
   ],
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "action": { "default_title": "Mystery Shopping AI — edit this form" }

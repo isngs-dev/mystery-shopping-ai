@@ -57,7 +57,11 @@ def grammar_rules(db: Session, form: Form, client_id: int | None = None) -> dict
     (for example when the AI recognises the report as CXE although it sits in an APC folder)."""
     cid = client_id or form.project.client_id
     pid = form.project_id if cid == form.project.client_id else None
-    ftype = form.form_type
+    return rules_for_company(db, cid, pid, form.form_type)
+
+
+def rules_for_company(db: Session, cid: int | None, pid: int | None = None, ftype: str | None = None) -> dict:
+    """Same as `grammar_rules`, for a client without a form (a page that is not a Drive PDF): `cid` None gives the general rules only."""
     pub = [rv for rv in published_versions(db) if in_qc(rv) and rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype)]
     drafts = [rv for rv in db.execute(select(RuleVersion).where(RuleVersion.status == "pending_approval")).scalars()
               if rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype)]

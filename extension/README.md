@@ -57,6 +57,14 @@ teller" keeps the spoken words in quotation marks. The model fixes sentences too
 Things the editor sees but must not change alone (unbalanced quotation marks, stray symbols, unknown words) are listed under *Needs your attention*.
 Without a model only the built-in rules above run: they cannot rewrite a sentence.
 
+## Intelli-Shop shop review pages (HTML website)
+On `*.intelli-shop.com` the extension (`intellishop.js`) reads the shop review page (`ShopReview-Right.php?JobID=…`): every question with a text box
+(`textarea[name="Q[id]"]`) is an answer. The client comes from the page header (`.white16bold`, for example "Love's: T-Stop") and is matched with the
+platform's clients; the answers go to `POST /api/ext/text/propose` (same editor, rules, safety policy and question awareness as for PDFs).
+Edits are underlined inside the boxes; a card pops up at the edit while you scroll and moves with it (hover an underline for its card): who suggests it,
+Accept / Dismiss, your own wording, a comment box for the AI (*Ask AI*). **The page text is never changed**: Accept marks the decision and the corrected
+wording can be copied. Sign in once from the round badge. After updating the extension, reload it and refresh the Intelli-Shop tab.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part
