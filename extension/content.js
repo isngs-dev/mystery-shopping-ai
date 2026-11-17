@@ -469,26 +469,35 @@
   function pagerPage() {
     const total = S.prop && S.prop.pages ? S.prop.pages.length : 0
     if (!total) return null
-    const rx = new RegExp('/\\s*' + total + '\\b')
+    const rx = new RegExp('(?:/|\\bof)\\s*' + total + '\\b')
     for (const inp of document.querySelectorAll('input')) {
       if (host.contains(inp)) continue
       const v = parseInt(inp.value, 10)
       if (!(v >= 1 && v <= total)) continue
-      const box = inp.parentElement && inp.parentElement.parentElement
-      if (box && rx.test(box.textContent || '')) return v
+      let box = inp.parentElement
+      for (let k = 0; k < 4 && box; k++, box = box.parentElement) {                  // "Page [2] / 6": the number box and the total sit close together
+        const t = box.textContent || ''
+        if (t.length < 90 && rx.test(t)) return v
+      }
     }
     return null
   }
   const fixedAnchor = { getBoundingClientRect: () => ({ left: 56, top: 150, right: 66, bottom: 160, width: 10, height: 10 }) }
   let lastPager = null, lastFallback = 0
-  every(() => { const p = S.marks && !marks.size ? pagerPage() : null; if (p && p !== lastPager) { lastPager = p; autoSoon(200) } }, 700)
+  every(() => { const p = S.marks && S.auto && !S.tour ? pagerPage() : null; if (p && p !== lastPager) autoSoon(150) }, 600)
 
   /** No page images found (Drive draws the viewer differently): follow the pager instead - one card for the next edit on the page you are on. */
   function autoFallback() {
     const pg = pagerPage()
-    if (!pg || Date.now() - lastFallback < 2500) return
-    const e = S.edits.find((x) => x.page === pg && !S.seen.has(x.id))
-    if (!e) return
+    const changed = !!pg && pg !== lastPager
+    if (!changed && Date.now() - lastFallback < 2500) return
+    if (pg) lastPager = pg
+    // on the page you scrolled to; before the pager is known, the first edit of the form starts the flow
+    const e = pg ? S.edits.find((x) => x.page === pg && !S.seen.has(x.id)) : (S.seen.size === 0 ? S.edits[0] : null)
+    if (!e) {
+      if (changed && tip && tip.dataset.auto === '1' && tip._anchor === fixedAnchor && +tip.dataset.page !== pg) hideTip()      // the old card belongs to another page
+      return
+    }
     lastFallback = Date.now()
     S.seen.add(e.id)
     showCard(e, fixedAnchor, true)
@@ -497,7 +506,6 @@
   function autoCheck() {
     if (!S.auto || S.tour || !S.marks || S.hideMarks || !canAct()) return
     if (tip && tip.dataset.pinned === '1') return                           // the human is typing in a card
-    if (!marks.size) return autoFallback()
     let best = null, bestD = 1e9
     for (const n of marks.values()) {
       const r = n.getBoundingClientRect()
@@ -507,7 +515,8 @@
       if (d < bestD) { best = n; bestD = d }
     }
     if (best) { S.seen.add(best._e.id); showCard(best._e, best, true) }
-    else if (tip && tip.dataset.auto === '1' && tip._anchor) {                // scrolled away from the card's edit
+    else if (autoFallback(), false) { /* the pager decided */ }
+    else if (tip && tip.dataset.auto === '1' && tip._anchor && tip._anchor !== fixedAnchor) {                // scrolled away from the card's edit
       const r = tip._anchor.getBoundingClientRect()
       if (r.bottom < 0 || r.top > innerHeight) hideTip()
     }
@@ -592,6 +601,7 @@
       el('div', { class: 'acts', style: 'margin-top:0' }, toggle, jump, el('span', { class: 'state' }, e.accepted ? 'Will be applied' : 'Dismissed')),
       controls(e, redraw, true), nav)
     tip.dataset.id = e.id
+    tip.dataset.page = String(e.page)
     tip.dataset.auto = auto ? '1' : '0'
     tip._anchor = anchor
     tip.addEventListener('mouseenter', () => clearTimeout(tipTimer))
