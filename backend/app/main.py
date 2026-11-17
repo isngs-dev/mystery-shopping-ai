@@ -11,7 +11,7 @@ from sqlalchemy import select
 from .config import get_settings
 from .db import Base, SessionLocal, engine
 from .models import User
-from .routers import admin, auth, forms, integrations, media, project_qc, qc, reports, rules
+from .routers import admin, auth, extension, forms, integrations, media, project_qc, qc, reports, rules
 from .security import hash_password
 from .services import drive_sync, pipeline, qc_reports
 from .services.auto_editor import get_ai_editor
@@ -91,7 +91,7 @@ def create_app() -> FastAPI:
         log.exception("Unhandled error: %s", exc)
         return JSONResponse({"detail": "Unexpected server error. It has been logged."}, status_code=500)
 
-    for r in (auth.router, admin.router, forms.router, qc.router, rules.router, reports.router, integrations.router, media.router, project_qc.router):
+    for r in (auth.router, admin.router, forms.router, qc.router, rules.router, reports.router, integrations.router, media.router, project_qc.router, extension.router):
         app.include_router(r)
 
     dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"

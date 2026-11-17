@@ -23,7 +23,9 @@ PERMISSIONS: dict[str, set[Role]] = {
     "projects.assign_reviewer": {R.SUPER_ADMIN, R.ADMIN, R.MANAGER},      # hand a whole project to a QC lead: QC runs on all its forms
     "docs.upload_raw": {R.SUPER_ADMIN, R.ADMIN, R.MANAGER},
     "docs.upload_edited": {R.MANAGER, R.EDITOR},
-    "docs.ai_edit": {R.ADMIN, R.MANAGER, R.EDITOR},       # run the AI editor on a form
+    "docs.ai_edit": {R.ADMIN, R.MANAGER, R.EDITOR, R.QC_REVIEWER},       # run the AI editor on a form / use the editing extension (QC leads are editors too)
+    "docs.ai_confirm": {R.ADMIN, R.MANAGER},                              # the leader: confirms the human-checked AI edits, which sends the form to QC
+    "ext.rules": {R.MANAGER},                                             # the leader adds grammar rules from the extension
     "qc.report": {R.SUPER_ADMIN, R.ADMIN, R.MANAGER, R.QC_REVIEWER},     # QC report PDF (contains evidence + reviewer data)
     "integrations.manage": {R.MANAGER},                                   # Drive import / sync: only the manager (Geeta); others see the imported data
     "tracker.view": {R.SUPER_ADMIN, R.ADMIN, R.MANAGER, R.QC_REVIEWER, R.REPORTING, R.OPS_SPONSOR, R.PROCESS_OWNER},

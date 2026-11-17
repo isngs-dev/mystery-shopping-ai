@@ -73,7 +73,7 @@ def test_manual_ai_edit_and_permissions(api, ctx):
     fid = upload(mgr, ctx["p1"], "FORM101_1.pdf", raw).json()["results"][0]["form_id"]      # auto edit disabled in tests
     assert mgr.get(f"/api/forms/{fid}").json()["edited_versions"] == 0
     mgr.post(f"/api/forms/{fid}/assign", json={"editor_id": ctx["users"]["editor"], "reviewer_id": ctx["users"]["qc"]})
-    assert api("qc").post(f"/api/forms/{fid}/ai-edit").status_code == 403                  # QC stays independent of editing
+    assert api("poc").post(f"/api/forms/{fid}/ai-edit").status_code == 403                  # the client's contact never edits (QC leads do: they are editors too)
     assert api("viewer").post(f"/api/forms/{fid}/ai-edit").status_code == 403
     assert api("editor2").post(f"/api/forms/{fid}/ai-edit").status_code == 404              # not their form
     r = api("editor").post(f"/api/forms/{fid}/ai-edit")
@@ -209,3 +209,64 @@ def test_raw_only_forms_are_edited_and_qcd_by_the_sync_without_waiting(api, ctx)
     assert [d.origin for d in f.documents if d.kind == "edited"] == ["ai_assisted"] and f.status == "qc_review"
     assert db.scalars(select(QCRun).where(QCRun.form_id == f.id)).first() is not None             # QC ran on the edited PDF
     db.close()
+
+
+def test_rule_editor_handles_quotation_marks_brackets_and_symbols():
+    """Quotation marks (space inside, full stop outside), brackets, apostrophes and symbols are corrected; facts, links and inches are left alone."""
+    from app.services.auto_editor import _resolve, rule_based_edits
+    from app.services.compare import build_tokens
+    from app.services.extraction import extract_pdf
+    from app.sample_docs import _render
+    pdf = _render(['The teller said, " I can help you here". I moved to the counter and I dont know the price of 50 % of it ( my first name ).',
+                   'She was 5\'3" tall and said "thanks for coming in" then left.The next customer waited at https://example.com/a....b today.'])
+    toks = build_tokens(extract_pdf(pdf).pages)
+    ops, skipped = rule_based_edits(toks)
+    ops, _ = _resolve(ops, toks)
+    out = {o.original: (o.replacement, o.category) for o in ops}
+    assert out['" I'] == ('"I', "quotation")                                              # no space inside the opening mark
+    assert out['here".'] == ('here."', "quotation")                                       # full stop goes inside the closing mark
+    assert out["dont"][0] == "don't"                                             # apostrophe (the dictionary or the symbol rule)
+    assert out["50 %"] == ("50%", "symbols")
+    assert out["( my"] == ("(my", "symbols") and out["name )."][0] == "name)."
+    assert not any("5'3" in o.original or "example.com" in o.original or "thanks for coming in" in o.original for o in ops)
+    assert not any("not balanced" in s["reason"] for s in skipped)                         # 5'3" is a unit, the other marks are paired
+
+
+def test_rule_editor_flags_unbalanced_quotes_for_a_human():
+    from app.services.auto_editor import rule_based_edits
+    from app.services.compare import build_tokens
+    from app.services.extraction import extract_pdf
+    from app.sample_docs import _render
+    toks = build_tokens(extract_pdf(_render(['The teller said "I can help you here and I moved to the counter quickly.'])).pages)
+    ops, skipped = rule_based_edits(toks)
+    assert any("not balanced" in s["reason"] and "needs a human" in s["reason"] for s in skipped)
+
+
+def test_ai_editor_sees_the_form_questions_with_the_answers():
+    """The model gets every question next to its answer, so it can correct the answer to fit what the question asks."""
+    from app.services import auto_editor
+    from app.services.compare import build_tokens
+    from app.services.extraction import extract_pdf
+    from app.sample_docs import _render
+
+    class Spy:
+        prompts: list = []
+
+        def analyze(self, system, prompt):
+            Spy.prompts.append((system, prompt))
+            from types import SimpleNamespace
+            return SimpleNamespace(text='{"edits":[]}', model="spy", usage={})
+
+    pdf = _render(["Please describe the circumstances of your visit:", "After the initial rejection, hey tell her spaces down the counter said I can help you here.",
+                   "Please detail what was said by the teller:", "Thanks for coming in my first name."])
+    extracted = extract_pdf(pdf)
+    toks = build_tokens(extracted.pages)
+
+    class P:
+        def __init__(self, t, n):
+            self.text, self.page_no = t, n
+    auto_editor.ai_edits(Spy(), toks, [P(p.text, p.page_no) for p in extracted.pages], None, set(), set())
+    system, prompt = Spy.prompts[0]
+    assert "<form_questions>" in prompt and "QUESTION: Please describe the circumstances of your visit:" in prompt
+    assert "ANSWER: After the initial rejection" in prompt
+    assert "QUOTATION MARKS" in system and "FORM QUESTIONS" in system

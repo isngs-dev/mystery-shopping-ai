@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mystery Shopping AI — Editor: settings</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 520px; margin: 32px auto; padding: 0 16px; }
+  h1 { font-size: 20px; }
+  label { display: block; margin: 14px 0 4px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit; border-radius: 8px; border: 1px solid #8887; }
+  button { margin-top: 14px; padding: 8px 14px; font: inherit; border-radius: 8px; border: 0; background: #1f7a5a; color: #fff; cursor: pointer; }
+  button.ghost { background: transparent; color: inherit; border: 1px solid #8887; }
+  .note { opacity: .75; font-size: 12.5px; margin-top: 6px; }
+  #msg { margin-top: 12px; min-height: 1.4em; }
+  .ok { color: #1f9d55; } .err { color: #d64545; }
+</style>
+</head>
+<body>
+<h1>Mystery Shopping AI — Editor</h1>
+<p class="note">The extension opens a panel next to RAW forms in Google Drive. It talks to your Mystery Shopping AI server; nothing is sent anywhere else.</p>
+<label for="server">Server address</label>
+<input id="server" placeholder="https://mystery-shopping-ai.onrender.com" autocomplete="off">
+<div class="note">Local test: <code>http://localhost:8000</code></div>
+<button id="save">Save and allow this address</button>
+<div id="who" class="note"></div>
+<button id="logout" class="ghost" hidden>Sign out</button>
+<div id="msg"></div>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>3353940_1.pdf - Google Drive</title>
+<style>
+  body { margin: 0; font: 14px system-ui; background: #f1f3f4; color: #202124; }
+  .bar { height: 56px; background: #fff; border-bottom: 1px solid #ddd; display: flex; align-items: center; padding: 0 16px; font-size: 16px; }
+  .doc { max-width: 620px; margin: 16px auto; background: #fff; box-shadow: 0 1px 6px #0003; }
+  .doc img { width: 100%; display: block; }
+</style>
+</head>
+<body>
+<div class="bar">3353940_1.pdf — (DEV: pretend Google Drive. Panel on the right = real extension code + real server + real form)</div>
+<div class="doc" id="doc"></div>
+<script src="live-chrome.js"></script>
+<script src="../background.js"></script>
+<script src="../lib/detect.js"></script>
+<script>
+  // show the real RAW pages (what the editor would be looking at in the Drive preview)
+  ;(async () => {
+    for (let pg = 1; pg <= 5; pg++) {
+      const r = await chrome.runtime.sendMessage({ type: 'api', path: `/api/documents/52/pages/${pg}/image?zoom=1.4`, as: 'image' })
+      if (r.ok) { const i = new Image(); i.src = r.dataUrl; i.style.marginBottom = '8px'; document.getElementById('doc').appendChild(i) }
+    }
+  })()
+</script>
+<script src="../content.js"></script>
+</body>
+</html>

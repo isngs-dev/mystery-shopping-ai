@@ -139,6 +139,12 @@ A sync that was cut off by a stopped server is closed at the next start and sync
 
 **The Excel files fill themselves:** a background worker (`QC_REPORTS_AUTO`, on by default) keeps `backend/data/qc-reports/<Client>/<Project>.xlsx` current — it rewrites a project's workbook a few seconds after a form is synced from Drive or uploaded, a QC run finishes, a reviewer accepts/rejects a finding or a project is assigned (a burst of changes means one rewrite), and rebuilds all of them at start-up. If a file is open in Excel the write is retried. The download buttons always build a fresh copy.
 
+### Chrome extension (editor panel in Google Drive)
+
+`extension/` is a Manifest V3 extension: a RAW form opened in Google Drive gets a panel on its right with the company's grammar rules, the AI's
+edits, a feedback box for re-editing, and a button that creates the edited PDF and runs QC. API: `/api/ext/*` (`login`, `identify`,
+`forms/{id}/propose`, `forms/{id}/finalize`, `forms/{id}/status`). Setup and limits: `extension/README.md`.
+
 ### The fixed QC error table
 
 QC checks **only** the team's error sheet — nothing else is run, reported or scored (`backend/app/services/error_taxonomy.py`, shown on the Rules page and at `GET /api/qc/error-table`):
