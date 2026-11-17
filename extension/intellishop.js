@@ -406,7 +406,7 @@
     set(bodyEl, ...parts)
     const again = el('button', { class: 'primary' }, 'Check again')
     again.addEventListener('click', () => { S.dismissed.clear(); check() })
-    set(footEl, el('div', { class: 'small muted' }, 'Answers are sent to your platform server (and its AI model) to be checked. Nothing is written back to this page.'), again)
+    set(footEl, el('div', { class: 'small muted' }, 'Answers are sent to your platform server (and its AI model) to be checked. Nothing is written back to this page. Version ' + version + '.'), again)
   }
 
   // ------------------------------------------------------------------------------------------------ start
@@ -417,10 +417,19 @@
     document.body.append(host)
     check()
   }
+  // The badge is always there on Intelli-Shop pages (dimmed when this page has no answer boxes), so it is clear the extension runs; the panel says what is missing.
+  const version = (() => { try { return chrome.runtime.getManifest().version } catch (_) { return '?' } })()
+  const idleNote = () => {
+    set(bodyEl, card('info', el('h3', {}, 'No answer boxes on this page'), el('div', { class: 'small' }, 'The extension is running (version ' + version + ') but found no text boxes under questions here. Open a shop Review page (ShopReview-Right.php?JobID=…) and it checks the answers automatically.')))
+    set(footEl, el('div', { class: 'small muted' }, 'Mystery Shopping AI · version ' + version + ' · ' + location.host))
+  }
+  const mount = () => { if (!host.isConnected && document.body) document.body.append(host) }
+  mount(); badge.style.opacity = '.55'; setBadge(0); badgeN.textContent = '–'; idleNote()
   let waited = 0
   const wait = setInterval(() => {
     if (!alive()) return clearInterval(wait)
-    if (answerBoxes().length) { clearInterval(wait); start() } else if (++waited > 40) clearInterval(wait)        // wait for the answer boxes (about a minute)
+    mount()
+    if (answerBoxes().length) { clearInterval(wait); badge.style.opacity = ''; start() } else if (++waited > 40) clearInterval(wait)        // wait for the answer boxes (about a minute)
   }, 1500)
   chrome.runtime.onMessage.addListener((msg) => { if (msg && msg.type === 'open-panel') setPanel(true) })
 })()
