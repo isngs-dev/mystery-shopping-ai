@@ -164,7 +164,7 @@
   const S = {
     file: null, info: null, prop: null, edits: [], feedback: '', rounds: 0, result: null, previews: {}, open: null, session: null, caps: {},
     marks: false, hideMarks: false, filter: 'all', flash: null, auto: true, seen: new Set(), comments: {}, drafts: {}, expanded: new Set(), reviewMode: false,
-    note: '', newRule: null,
+    note: '', newRule: null, tour: false, tourIdx: 0,
   }
 
   const GROUP = { spelling: 'red', grammar: 'red', sentence: 'red', profanity: 'red', punctuation: 'blue', quotation: 'blue', symbols: 'blue', spacing: 'blue', capitalisation: 'blue', capitalization: 'blue', capital: 'blue' }
@@ -378,7 +378,7 @@
   }
 
   function autoCheck() {
-    if (!S.auto || !S.marks || S.hideMarks || !canAct()) return
+    if (!S.auto || S.tour || !S.marks || S.hideMarks || !canAct()) return
     if (tip && tip.dataset.pinned === '1') return                           // the human is typing in a card
     if (!marks.size) return autoFallback()
     let best = null, bestD = 1e9
@@ -444,16 +444,25 @@
     hideTip()
     const redraw = () => { hideTip(); render(true); layout(); showCard(e, anchor, auto) }
     const toggle = el('button', { class: e.accepted ? '' : 'primary' }, e.accepted ? 'Dismiss' : 'Accept')
-    toggle.addEventListener('click', () => { e.accepted = !e.accepted; hideTip(); render(true); layout() })
+    toggle.addEventListener('click', () => { e.accepted = !e.accepted; hideTip(); render(true); layout(); if (S.tour) showCard(e, anchor, auto) })
     const jump = el('button', {}, 'In list')
     jump.addEventListener('click', () => { hideTip(); setPanel(true); S.expanded.add(e.id); render(true); focusSuggestion(e) })
     const x = el('button', { class: 'x', title: 'Close' }, '✕')
     x.addEventListener('click', hideTip)
+    const who = e.source === 'ai' ? '✨ Edited by the AI' : e.source === 'human' ? '✎ Edited by a person' : '⚙ Edited by the grammar rules'
+    const nav = !S.tour ? null : el('div', { class: 'acts', style: 'justify-content:space-between;border-top:1px solid #eef0f3;padding-top:8px;margin-top:8px' },
+      el('button', { 'data-nav': 'prev' }, '‹ Previous'), el('span', { class: 'small muted' }, `${S.tourIdx + 1} / ${S.edits.length}`), el('button', { class: 'primary', 'data-nav': 'next', style: 'padding:3px 14px' }, 'Next ›'), el('button', { 'data-nav': 'end' }, 'End'))
+    if (nav) {
+      nav.querySelector('[data-nav=prev]').addEventListener('click', () => tourGo(-1))
+      nav.querySelector('[data-nav=next]').addEventListener('click', () => tourGo(1))
+      nav.querySelector('[data-nav=end]').addEventListener('click', () => { S.tour = false; hideTip() })
+    }
     tip = el('div', { class: 'pop' }, el('div', { class: 'top' }, el('span', { class: 'cat' }, el('span', { class: `dot ${groupOf(e)}` }), labelOf(e)), x),
+      el('div', { class: 'small', style: 'font-weight:700;color:#5b3fc4;margin-top:2px' }, who + ' — please check'),
       el('div', { class: 'change' }, diffNodes(e)),
       el('div', { class: 'reason' }, e.reason, e.source === 'ai' ? '  · AI' : e.source === 'human' ? '  · you' : '  · rules'),
       el('div', { class: 'acts', style: 'margin-top:0' }, toggle, jump, el('span', { class: 'state' }, e.accepted ? 'Will be applied' : 'Dismissed')),
-      controls(e, redraw, true))
+      controls(e, redraw, true), nav)
     tip.dataset.id = e.id
     tip.dataset.auto = auto ? '1' : '0'
     tip._anchor = anchor
@@ -469,6 +478,19 @@
     const below = r.bottom + 8 + h < innerHeight
     tip.style.left = left + 'px'
     tip.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px'
+  }
+
+  /** "Review one by one": the edits one after the other, each with its card. Works even when the underlines cannot be drawn on Drive's viewer. */
+  function startTour() { if (!S.edits.length) return; S.tour = true; S.tourIdx = 0; tourShow() }
+  function tourGo(d) { S.tourIdx = Math.max(0, Math.min(S.edits.length - 1, S.tourIdx + d)); tourShow() }
+  function tourShow() {
+    const e = S.edits[S.tourIdx]
+    if (!e) return
+    hideTip()
+    const n = [...marks.values()].find((m) => m._e.id === e.id)
+    S.seen.add(e.id)
+    if (n) { focusSuggestion(e); setTimeout(() => { const m = [...marks.values()].find((x) => x._e.id === e.id); showCard(e, m || fixedAnchor, true) }, 450) }
+    else { setPanel(true); togglePreview(e, true); showCard(e, fixedAnchor, true) }        // no underline to point at: the panel shows the page with the place marked
   }
 
   /** Scroll the page to this edit's place and flash it. */
@@ -671,7 +693,8 @@
     const summary = el('div', { class: 'summary' }, el('div', { class: 'ring' + (S.edits.length ? '' : ' zero') }, String(S.edits.length)),
       el('div', {}, el('div', { style: 'font-weight:700;font-size:14px' }, S.edits.length ? `${S.edits.length} suggestion${S.edits.length === 1 ? '' : 's'}` : 'Nothing to correct'),
         el('div', { class: 'small muted' }, S.edits.length ? 'Underlined on the page; a card pops up as you scroll.' : 'No correction was found. You can still send the RAW on unchanged.'),
-        el('div', { class: 'small muted' }, `Round ${S.rounds}`)))
+        el('div', { class: 'small muted' }, `Round ${S.rounds}`),
+        S.edits.length && canAct() ? (() => { const b = el('button', { class: 'primary', style: 'margin-top:6px;padding:5px 14px;font-size:12px' }, '▶ Check the edits one by one'); b.addEventListener('click', startTour); return b })() : null))
     return [summary, S.edits.length ? tabs : null]
   }
 
