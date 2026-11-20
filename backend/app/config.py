@@ -109,6 +109,19 @@ class Settings(BaseSettings):
         m = re.search(r"/folders/([A-Za-z0-9_-]+)", v) or re.search(r"[?&]id=([A-Za-z0-9_-]+)", v)
         return m.group(1) if m else v.strip()
 
+    @field_validator("anthropic_api_key", "openai_api_key")
+    @classmethod
+    def _clean_key(cls, v: str | None) -> str | None:
+        """Keys pasted into a host's environment page often carry quotes, spaces, a line break, "Bearer " or "ANTHROPIC_API_KEY=": all removed."""
+        if v is None:
+            return v
+        import re
+
+        v = v.strip().strip("'\"").strip()
+        v = re.sub(r"^(?:[A-Z_]*API_KEY\s*=\s*|Bearer\s+)", "", v, flags=re.I).strip().strip("'\"")
+        v = re.sub(r"\s+", "", v)                                                  # a key never contains white space (a wrapped paste does)
+        return v or None
+
     @field_validator("database_url")
     @classmethod
     def _driver(cls, v: str) -> str:

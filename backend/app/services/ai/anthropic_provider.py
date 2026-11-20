@@ -9,6 +9,14 @@ _EFFORT_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claud
                     "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
 
 
+def _key_shape(key: str | None) -> str:
+    """What the server holds, without revealing it: the standard prefix and the length, so a wrong paste can be spotted."""
+    k = key or ""
+    pre = k[:7] if k.startswith("sk-ant-") else "(does not start with sk-ant-)"
+    return f"The key set on this server starts with {pre}… and is {len(k)} characters long (a normal Anthropic key is about 100 to 110); " \
+           "check it in the Anthropic Console (it may be revoked, from another workspace, or have no credit) and paste it again as the plain value."
+
+
 class AnthropicProvider(AIProvider):
     name = "anthropic"
     external = True
@@ -33,7 +41,7 @@ class AnthropicProvider(AIProvider):
             ) as stream:
                 msg = stream.get_final_message()
         except anthropic.AuthenticationError as exc:
-            raise AIError("Anthropic rejected the API key (authentication failed).") from exc
+            raise AIError("Anthropic rejected the API key (authentication failed). " + _key_shape(self._key)) from exc
         except anthropic.PermissionDeniedError as exc:
             raise AIError("The Anthropic API key lacks permission for this model.") from exc
         except anthropic.NotFoundError as exc:
