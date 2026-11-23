@@ -4,7 +4,9 @@
    - Edits are drawn as coloured underlines under the words inside the boxes. While you scroll, a card pops up at the edit in the middle of the screen and
      scrolls with it (hover any underline to see its card). The card says who suggests it (AI or the built-in rules) and offers Accept / Dismiss, your own
      wording, and a comment box for the AI ("Ask AI" re-edits that passage with your comment).
-   - NOTHING on the page is changed: the answers stay as they are. Accept marks the decision and gives the corrected wording to copy.
+   - Accept writes the corrected wording into that answer's own box on the page (Undo puts the old words back). Nothing reaches the website's database until
+     the person presses "Save to site & download PDF": that presses the website's own UPDATE SURVEY button and, when the page has reloaded, downloads the
+     form's PDF from the website itself (the same "PDF" button of its Company View), so the file shows the edited answers.
    Everything that comes from the page or the server is inserted with textContent, never as HTML. */
 (function () {
   if (window.__msaiShop) return
@@ -108,7 +110,7 @@
   wrap.append(el('header', {}, el('div', { class: 'logo' }, 'M'), el('div', { class: 'title' }, 'Mystery Shopping AI', subtitle), autoBtn, gear, minBtn), bodyEl, footEl)
   root.append(layer, wrap, badge)
 
-  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false }
+  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false, orig: new Map(), confirm: false, note: null }
   let tip = null, tipHover = null
 
   function setPanel(openIt) { wrap.classList.toggle('hidden', !openIt); badge.classList.toggle('panel-open', openIt); relayout() }
@@ -168,6 +170,7 @@
     if (S.busy) return
     S.busy = true
     S.rows = answerBoxes()
+    for (const x of S.rows) if (!S.orig.has(x.id)) S.orig.set(x.id, x.ta.value)      // what the answer said when the page was opened (to count what was edited)
     set(bodyEl, card('', el('span', { class: 'spin' }), `Checking ${S.rows.length} answer${S.rows.length === 1 ? '' : 's'}…`))
     setBadge(null)
     const r = await api('POST', '/api/ext/text/propose', {
@@ -229,12 +232,46 @@
     const row = rowOf(e.qid)
     if (!row) return (e.valid = false)
     const v = row.ta.value
-    if (v.slice(e.start, e.end) === e.original) return (e.valid = true)
+    const now = shown(e)                                                             // the words that are in the box for this edit right now
+    if (v.slice(e.start, e.end) === now) return (e.valid = true)
     let best = -1
-    for (let i = v.indexOf(e.original); i !== -1; i = v.indexOf(e.original, i + 1)) { if (best < 0 || Math.abs(i - e.start) < Math.abs(best - e.start)) best = i }
+    for (let i = v.indexOf(now); i !== -1; i = v.indexOf(now, i + 1)) { if (best < 0 || Math.abs(i - e.start) < Math.abs(best - e.start)) best = i }
     if (best < 0) return (e.valid = false)
-    e.start = best; e.end = best + e.original.length
+    e.start = best; e.end = best + now.length
     return (e.valid = true)
+  }
+  const shown = (e) => (e.applied ? e.final : e.original)
+
+  /** Accept: the corrected wording is written into the page's own box (the site sees a normal edit: input + change events). */
+  function setBox(ta, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+    setter.call(ta, value)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+    ta.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+  /** Replace [e.start, e.end) of the box by `text`; the other edits of the same box that sit after it move by the change in length. */
+  function splice(e, text) {
+    const row = rowOf(e.qid)
+    if (!row || !revalidate(e)) return false
+    const v = row.ta.value
+    const delta = text.length - (e.end - e.start)
+    const end0 = e.end
+    setBox(row.ta, v.slice(0, e.start) + text + v.slice(e.end))
+    for (const o of S.edits) { if (o !== e && o.qid === e.qid && o.start >= end0) { o.start += delta; o.end += delta } }
+    e.end = e.start + text.length
+    return true
+  }
+  function applyEdit(e) {
+    if (e.applied) return true
+    if (!splice(e, e.final)) return false
+    e.applied = true; e.state = 'accepted'
+    return true
+  }
+  function undoEdit(e) {
+    if (!e.applied) return true
+    if (!splice(e, e.original)) return false
+    e.applied = false; e.state = 'open'
+    return true
   }
 
   let flashId = null
@@ -268,13 +305,21 @@
     const comment = el('textarea', { placeholder: 'Tell the AI what to change (e.g. “keep past tense”) …' })
     const who = e.source === 'ai' ? el('span', { class: 'chip ai' }, 'AI editor') : el('span', { class: 'chip rules' }, 'Grammar rules')
     const status = el('div', { class: 'small muted' })
-    const accept = el('button', { class: 'primary' }, e.state === 'accepted' ? '✓ Accepted' : 'Accept')
-    const dismiss = el('button', {}, 'Dismiss')
+    const accept = el('button', { class: 'primary' }, e.applied ? '✓ Applied' : 'Accept')
+    if (e.applied) accept.disabled = true
+    const dismiss = el('button', {}, e.applied ? 'Undo' : 'Dismiss')
     const copy = el('button', {}, 'Copy fix')
     const ask = el('button', {}, 'Ask AI')
-    const note = e.state === 'accepted' ? el('div', { class: 'small ok card', style: 'margin:6px 0' }, 'Accepted. The page text is not changed: type or paste the corrected wording in the box.') : null
-    accept.addEventListener('click', () => { e.final = own.value.trim() || e.replacement; e.state = 'accepted'; decided() ; showCard0(e, auto) })
-    dismiss.addEventListener('click', () => { e.state = 'dismissed'; S.dismissed.add(e.original + '\u0001' + e.replacement); hideTip(); decided() })
+    const note = e.applied ? el('div', { class: 'small ok card', style: 'margin:6px 0' }, 'Written into the answer box. It is saved on the website only when you press “Save to site & download PDF”. Undo puts the old words back.') : null
+    accept.addEventListener('click', () => {
+      e.final = own.value.trim() || e.replacement
+      if (!applyEdit(e)) { status.textContent = 'The answer changed there; press “Check again”.'; return }
+      decided(); showCard0(e, auto)
+    })
+    dismiss.addEventListener('click', () => {
+      if (e.applied) { if (!undoEdit(e)) { status.textContent = 'The answer changed there; press “Check again”.'; return } decided(); showCard0(e, auto); return }
+      e.state = 'dismissed'; S.dismissed.add(e.original + '\u0001' + e.replacement); hideTip(); decided()
+    })
     copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(own.value.trim() || e.replacement); copy.textContent = 'Copied' } catch (_) { own.select(); copy.textContent = 'Select + Ctrl+C' } })
     ask.addEventListener('click', async () => {
       if (comment.value.trim().length < 2) { status.textContent = 'Write a short comment first.'; return }
@@ -291,6 +336,7 @@
     p.querySelector('.x').addEventListener('click', () => hideTip())
     p.addEventListener('mouseenter', () => { tipHover = true })
     p.addEventListener('mouseleave', () => { tipHover = false })
+    if (e.applied) own.disabled = true
     p.edit = e; p.auto = auto
     tip = p
     root.append(p)
@@ -329,12 +375,12 @@
     const keep = S.edits.filter((x) => x.qid !== e.qid || x.state !== 'open')
     const fresh = r.data.edits.map((n) => ({ ...n, state: 'open', final: n.replacement, said: (n.start < e.end && n.end > e.start) ? [text] : [], valid: true }))
     S.edits = [...keep, ...fresh.filter((n) => !keep.some((k) => k.qid === n.qid && k.start < n.end && k.end > n.start))].sort((a, b) => (+a.qid - +b.qid) || a.start - b.start)
-    hideTip(); relayout(); renderPanel(); setBadge(S.edits.filter((x) => x.state !== 'dismissed').length)
+    hideTip(); relayout(); renderPanel(); setBadge(S.edits.filter((x) => x.state === 'open').length)
     const again = fresh.find((n) => n.said.length) || fresh[0]
     const cur = again && S.edits.find((x) => x.id === again.id)
     if (cur && visible(cur)) showCard(cur, false)
   }
-  function decided() { renderPanel(); relayout(); setBadge(S.edits.filter((x) => x.state !== 'dismissed').length) }
+  function decided() { renderPanel(); relayout(); setBadge(S.edits.filter((x) => x.state === 'open').length) }
 
   // hover: a card for the underline under the mouse
   let mv = null, hideAt = 0
@@ -390,7 +436,7 @@
         i.pending_rules ? el('div', { class: 'small', style: 'margin-top:4px' }, `${i.pending_rules} checklist rule${i.pending_rules === 1 ? ' is' : 's are'} still waiting for the Super Admin's approval; they are used for editing, not for QC.`) : null))
       if (i.message) parts.push(card('warn', i.message))
       const open = S.edits.filter((e) => e.state !== 'dismissed')
-      parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. The page text is never changed.`))
+      parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. Accept writes the fix into the box; nothing is saved on the website until you save.`))
       let last = null
       for (const e of S.edits) {
         const row = rowOf(e.qid)
@@ -404,11 +450,98 @@
       }
       if (!S.edits.length) parts.push(card('ok', el('b', {}, 'No edits needed.'), el('div', { class: 'small' }, 'Nothing to fix in the answers on this page.')))
     }
-    set(bodyEl, ...parts)
-    const again = el('button', { class: 'primary' }, 'Check again')
-    again.addEventListener('click', () => { S.dismissed.clear(); check() })
-    set(footEl, el('div', { class: 'small muted' }, 'Answers are sent to your platform server (and its AI model) to be checked. Nothing is written back to this page. Version ' + version + '.'), again)
+    set(bodyEl, noteCard(), ...parts)
+    renderFoot()
   }
+
+  // ------------------------------------------------------------------------------------------------ save on the website + download its PDF
+  const FLAG = 'msai_download'
+  const editedRows = () => S.rows.filter((x) => document.contains(x.ta) && x.ta.value !== S.orig.get(x.id))
+  const noteCard = () => (S.note ? card(S.note.kind, el('div', { class: 'small' }, S.note.busy ? el('span', { class: 'spin' }) : null, S.note.text)) : null)
+  function jobInfo() {
+    const btn = [...document.querySelectorAll('input[type=button]')].find((b) => /companyView\(/.test(b.getAttribute('onclick') || ''))
+    const m = btn && (btn.getAttribute('onclick') || '').match(/companyView\(\s*(\d+)\s*,\s*['"]([^'"]+)['"]/)
+    if (!m) return null
+    const h = document.querySelector('.white16bold')
+    return { job: m[1], access: m[2], name: ((h ? h.textContent : '') || document.title).replace(/\s+/g, ' ').trim() }
+  }
+  /** The website's own PDF of the form (the "PDF" button of its Company View); it shows what is saved on the website. */
+  async function downloadPdf(j) {
+    const url = `${location.origin}/clients/ClientShopView.php?JobID=${encodeURIComponent(j.job)}&access=${encodeURIComponent(j.access)}&genpdf=1&mode=print&qset=`
+    const r = await fetch(url, { credentials: 'include' })
+    if (!r.ok || !/pdf/i.test(r.headers.get('content-type') || '')) throw new Error(`The website did not return a PDF (status ${r.status}).`)
+    const blob = await r.blob()
+    const name = ((j.name || 'Shop form').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Shop form') + ' - ' + j.job + '.pdf'
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob); a.download = name
+    document.body.append(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000)
+    return name
+  }
+  function saveAndDownload() {
+    const j = jobInfo()
+    const form = document.getElementById('JobSurveyForm') || document.querySelector('form[name="SurveyForm"]')
+    const btn = form && [...form.querySelectorAll('input[type=submit],button[type=submit]')].find((b) => b.name === 'submitButtonName' || /update survey/i.test(b.value || b.textContent || ''))
+    if (!j || !btn) { S.note = { kind: 'err', text: 'This page has no UPDATE SURVEY button or no Company View link, so it cannot be saved from here.' }; S.confirm = false; return renderPanel() }
+    try { sessionStorage.setItem(FLAG, JSON.stringify({ ...j, ts: Date.now() })) } catch (_) { S.note = { kind: 'err', text: 'The browser blocked temporary storage, so the download cannot follow the save. Press UPDATE SURVEY yourself, then “Download PDF”.' }; S.confirm = false; return renderPanel() }
+    S.confirm = false
+    S.note = { kind: 'info', busy: true, text: 'Pressing the website’s UPDATE SURVEY … the PDF downloads when the page has reloaded.' }
+    renderPanel()
+    setTimeout(() => {                                                               // still here: the page did not reload (the website refused or asked something)
+      if (dead) return
+      try { sessionStorage.removeItem(FLAG) } catch (_) { /* nothing to remove */ }
+      S.note = { kind: 'warn', text: 'The website did not reload after UPDATE SURVEY, so nothing was downloaded. Check the page for a message (a required answer, a warning) and try again.' }
+      renderPanel()
+    }, 20000)
+    btn.click()
+  }
+  async function downloadOnly() {
+    const j = jobInfo()
+    if (!j) { S.note = { kind: 'err', text: 'No Company View link on this page.' }; return renderPanel() }
+    S.note = { kind: 'info', busy: true, text: 'Downloading the PDF from the website …' }; renderPanel()
+    try { S.note = { kind: 'ok', text: 'Downloaded from the website: ' + await downloadPdf(j) + ' (it shows what is saved on the website).' } } catch (e) { S.note = { kind: 'err', text: e.message || String(e) } }
+    renderPanel()
+  }
+  /** After UPDATE SURVEY the website reloads: this runs on the new page and downloads the PDF of the saved form. */
+  async function finishPending() {
+    let f = null
+    try { f = JSON.parse(sessionStorage.getItem(FLAG) || 'null') } catch (_) { f = null }
+    if (!f) return
+    if (Date.now() - f.ts > 180000) { try { sessionStorage.removeItem(FLAG) } catch (_) { /* expired */ } return }
+    S.note = { kind: 'info', busy: true, text: 'Saved on the website. Downloading its PDF …' }
+    setPanel(true); renderFoot(); set(bodyEl, noteCard())
+    await new Promise((r) => setTimeout(r, 1200))
+    try {
+      const name = await downloadPdf(f)
+      try { sessionStorage.removeItem(FLAG) } catch (_) { /* fine */ }
+      S.note = { kind: 'ok', text: 'The website reloaded after UPDATE SURVEY and its PDF was downloaded: ' + name }
+    } catch (e) { S.note = { kind: 'err', text: (e.message || String(e)) + ' Use “Download PDF” in this panel.' } }
+    S.checked ? renderPanel() : set(bodyEl, noteCard())
+  }
+  function renderFoot() {
+    const n = editedRows().length
+    const again = el('button', {}, 'Check again')
+    again.addEventListener('click', () => { S.dismissed.clear(); S.confirm = false; check() })
+    const dl = el('button', {}, 'Download PDF')
+    dl.title = 'The website’s own PDF of this form, as it is saved on the website'
+    dl.addEventListener('click', downloadOnly)
+    const parts = []
+    if (n && S.confirm) {
+      const yes = el('button', { class: 'primary' }, 'Yes, save & download')
+      const no = el('button', {}, 'Cancel')
+      yes.addEventListener('click', saveAndDownload)
+      no.addEventListener('click', () => { S.confirm = false; renderFoot() })
+      parts.push(card('warn', el('b', {}, `Save ${n} edited answer${n === 1 ? '' : 's'} on the website?`),
+        el('div', { class: 'small' }, 'This presses the website’s own UPDATE SURVEY button, so the answers are saved in this shop’s record. Then its PDF is downloaded.'), el('div', { class: 'acts' }, yes, no)))
+    } else if (n) {
+      const save = el('button', { class: 'primary' }, `Save to site & download PDF (${n} edited)`)
+      save.addEventListener('click', () => { S.confirm = true; renderFoot() })
+      parts.push(save)
+    }
+    set(footEl, el('div', { class: 'small muted' }, 'Answers are sent to your platform server (and its AI model) to be checked. Accept writes into the boxes here; the website changes only when you save. Version ' + version + '.'),
+      ...parts, el('div', { class: 'acts', style: 'margin:0' }, again, dl))
+  }
+  addEventListener('input', (ev) => { if (ev.target && ev.target.name && /^Q\[/.test(ev.target.name) && !S.confirm) renderFoot() }, true)
 
   // ------------------------------------------------------------------------------------------------ start
   async function start() {
@@ -433,4 +566,5 @@
     if (answerBoxes().length) { clearInterval(wait); badge.style.opacity = ''; start() } else if (++waited > 40) clearInterval(wait)        // wait for the answer boxes (about a minute)
   }, 1500)
   chrome.runtime.onMessage.addListener((msg) => { if (msg && msg.type === 'open-panel') setPanel(true) })
+  finishPending()
 })()

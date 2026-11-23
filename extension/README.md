@@ -62,8 +62,13 @@ On `*.intelli-shop.com` and `*.cxeview.com` (same software) the extension (`inte
 (`textarea[name="Q[id]"]`) is an answer. The client comes from the page header (`.white16bold`, for example "Love's: T-Stop") and is matched with the
 platform's clients; the answers go to `POST /api/ext/text/propose` (same editor, rules, safety policy and question awareness as for PDFs).
 Edits are underlined inside the boxes; a card pops up at the edit while you scroll and moves with it (hover an underline for its card): who suggests it,
-Accept / Dismiss, your own wording, a comment box for the AI (*Ask AI*). **The page text is never changed**: Accept marks the decision and the corrected
-wording can be copied. Sign in once from the round badge. After updating the extension, reload it and refresh the Intelli-Shop tab.
+Accept / Dismiss, your own wording, a comment box for the AI (*Ask AI*).
+**Accept writes the corrected wording into that answer's own box on the website page** (Undo puts the old words back; the other edits of the box move along).
+Nothing reaches the website's record until you press **Save to site & download PDF** in the panel (it asks once): that presses the website's own
+*UPDATE SURVEY* button and, when the page has reloaded, downloads the form's PDF from the website itself (the "PDF" button of its Company View,
+`ClientShopView.php?...&genpdf=1`), so the file shows the edited answers. **Download PDF** alone fetches the PDF as it is saved on the website.
+If the website does not reload within 20 seconds (a required answer, a warning) nothing is downloaded and the panel says so.
+Sign in once from the round badge. After updating the extension, reload it and refresh the Intelli-Shop tab.
 
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
