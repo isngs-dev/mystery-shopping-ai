@@ -259,6 +259,56 @@ def test_ai_recognises_another_client_and_the_human_switches_the_rules(api, ctx)
     assert "Say customer not guest" in [u for s_, u in fake.prompts if "identify which client company" not in s_][-1]
 
 
+class LearnProvider(RoutingProvider):
+    """Also answers the guideline-learning prompt: two usable rules, one with a type that is not a grammar rule (dropped)."""
+
+    def analyze(self, system, user):
+        if "guideline document into rules" in system:
+            self.prompts.append((system, user))
+            return AIResult(text=json.dumps({"rules": [
+                {"name": "Write the brand as Acme Retail", "description": "Always write the brand as “Acme Retail”, never “AcmeRetail”.", "type": "spelling", "examples": "AcmeRetail -> Acme Retail"},
+                {"name": "No mention of alcohol", "description": "Do not mention alcohol in the report; say “beverage”.", "type": "terminology"},
+                {"name": "Visit within 24 hours", "description": "The shopper must visit within a day.", "type": "scoring"}]}), model="fake-1")
+        return super().analyze(system, user)
+
+
+def test_the_guideline_file_on_the_website_is_learned_once_into_draft_rules_that_apply_to_its_pages(api, ctx):
+    import base64
+    import hashlib
+
+    prov = LearnProvider()
+    set_provider_override(prov)
+    try:
+        call = _auth(_token("qc"))
+        brief = _render(["Acme Retail client brief"] + [f"Rule {i}: write the brand as Acme Retail and never mention alcohol in the report text." for i in range(1, 9)])
+        sha = hashlib.sha256(brief).hexdigest()
+        body = {"client_hint": "Acme Retail: Store 978 - Carlin NV", "project": "Store 978 - Carlin NV", "sha256": sha, "filename": "brief.pdf", "source_url": "https://x.test/brief.pdf"}
+        assert call("POST", "/api/ext/guidelines/learn", json=body).json()["status"] == "need_content"                    # an unseen file: the platform asks for it
+        got = call("POST", "/api/ext/guidelines/learn", json={**body, "content_b64": base64.b64encode(brief).decode()}).json()
+        assert got["status"] == "learned" and got["rules"] == 2 and [r["name"] for r in got["learned"]][0].startswith("Write the brand")      # the scoring rule is dropped
+        assert any("<client_brief" in u and "never mention alcohol" in u for _, u in prov.prompts)
+        db = SessionLocal()
+        rows = db.execute(select(RuleVersion).where(RuleVersion.change_note.like("Learned by the AI%"))).scalars().all()
+        assert len(rows) == 2 and {r.status for r in rows} == {"pending_approval"} and all(r.client_id and r.config["guideline"] == sha[:16] for r in rows)
+        db.close()
+        again = call("POST", "/api/ext/guidelines/learn", json=body).json()                                                    # the same file again: nothing is read
+        assert again["status"] == "known" and again["rules"] == 2 and again["new_project"] is False
+        other = call("POST", "/api/ext/guidelines/learn", json={**body, "project": "Store 12 - Reno NV"}).json()               # a new project that links the same file
+        assert other["status"] == "known" and other["new_project"] is True
+        assert call("POST", "/api/ext/guidelines/learn", json={**body, "client_hint": "Unknown Brand"}).json()["status"] == "no_client"
+        assert _auth("bad")("POST", "/api/ext/guidelines/learn", json=body).status_code == 401
+        assert call("POST", "/api/ext/guidelines/learn", json={**body, "content_b64": "***"}).status_code == 422
+
+        form = {"client_hint": "Acme Retail: Store 978", "answers": [{"id": "1", "question": "Comments", "text": "The cashier greet me warmly at the door."}]}
+        plain = call("POST", "/api/ext/text/propose", json=form).json()
+        assert plain["learned_rules"] == 0 and not any("Write the brand" in r["name"] for r in plain["rules"])                  # a page without that file does not get its rules
+        mine = call("POST", "/api/ext/text/propose", json={**form, "guidelines": [sha[:16]]}).json()
+        assert mine["learned_rules"] == 2 and any(r["name"].startswith("Write the brand") and r["status"] == "draft" for r in mine["rules"])
+        assert any("Write the brand as Acme Retail" in u for _, u in prov.prompts if "<company_guidelines>" in u)             # the learned rule text reaches the editor model
+    finally:
+        set_provider_override(None)
+
+
 def test_text_form_edits_for_a_web_page_form_with_character_positions(api, ctx):
     """Intelli-Shop style page: questions + answers in, edits with character ranges inside each answer out; the client comes from the page header."""
     prov = RoutingProvider()

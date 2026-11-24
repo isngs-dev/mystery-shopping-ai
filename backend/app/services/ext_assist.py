@@ -60,16 +60,22 @@ def grammar_rules(db: Session, form: Form, client_id: int | None = None) -> dict
     return rules_for_company(db, cid, pid, form.form_type)
 
 
-def rules_for_company(db: Session, cid: int | None, pid: int | None = None, ftype: str | None = None) -> dict:
-    """Same as `grammar_rules`, for a client without a form (a page that is not a Drive PDF): `cid` None gives the general rules only."""
-    pub = [rv for rv in published_versions(db) if in_qc(rv) and rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype)]
+def rules_for_company(db: Session, cid: int | None, pid: int | None = None, ftype: str | None = None, guidelines: set[str] | None = None) -> dict:
+    """Same as `grammar_rules`, for a client without a form (a page that is not a Drive PDF): `cid` None gives the general rules only.
+    A rule the AI learned from a guideline file of a website carries that file's fingerprint (config.guideline) and applies only to the pages that
+    link that file: `guidelines` names the files of the page (none given: such rules are left out)."""
+    def _mine(rv: RuleVersion) -> bool:
+        g = (rv.config or {}).get("guideline")
+        return not g or g in (guidelines or set())
+
+    pub = [rv for rv in published_versions(db) if in_qc(rv) and rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype) and _mine(rv)]
     drafts = [rv for rv in db.execute(select(RuleVersion).where(RuleVersion.status == "pending_approval")).scalars()
-              if rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype)]
+              if rv.error_subtype in GRAMMAR and _applies(rv, cid, pid, ftype) and _mine(rv)]
     rows = [(rv, "published") for rv in pub] + [(rv, "draft") for rv in drafts]
     names = {u.id: u.name for u in db.execute(select(User)).scalars()}
     rules = [{"key": rv.rule.rule_key, "version_id": rv.id, "name": rv.name, "error": tx.label(rv.error_subtype), "subtype": rv.error_subtype,
               "description": rv.description, "examples": rv.examples, "scope": scope_level(rv), "company_specific": bool(rv.client_id or rv.project_id),
-              "status": st, "added_by": names.get(rv.created_by)} for rv, st in rows]
+              "status": st, "added_by": names.get(rv.created_by), "learned": bool((rv.config or {}).get("guideline"))} for rv, st in rows]
     return {"rules": rules, "company_rules": sum(1 for r in rules if r["company_specific"]),
             "pending_approval": [{"key": r["key"], "name": r["name"]} for r in rules if r["status"] == "draft"]}
 

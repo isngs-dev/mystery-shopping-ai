@@ -143,6 +143,60 @@
     return ((h ? h.textContent : document.title).replace(/\s+/g, ' ').trim().slice(0, 200) + ' | ' + location.hostname.replace(/^www\./, ''))
   }
 
+  // ------------------------------------------------------------------------------------------------ the client's guidelines on the website
+  /** The guideline file the shop page links ("Download Guidelines" -> the client's brief PDF). */
+  function guidelineLinks() {
+    const seen = new Set()
+    const out = []
+    for (const a of document.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href') || ''
+      if (!href || href.startsWith('#') || /^javascript:/i.test(href)) continue
+      const label = (a.textContent || '').replace(/\s+/g, ' ').trim()
+      const isFile = /\.(pdf|txt)(\?|#|$)/i.test(href)
+      if (!(/guideline|client brief|\bbrief\b|instruction/i.test(label) && (isFile || /guideline/i.test(label)) || (isFile && /guideline|brief/i.test(href)))) continue
+      let url
+      try { url = new URL(href, location.href) } catch (_) { continue }
+      if (!/^https?:$/.test(url.protocol) || url.origin !== location.origin || seen.has(url.href)) continue
+      seen.add(url.href)
+      out.push({ url: url.href, label: label || 'Guidelines' })
+      if (out.length >= 3) break
+    }
+    return out
+  }
+  const toB64 = (blob) => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(',')[1] || ''); f.onerror = rej; f.readAsDataURL(blob) })
+  const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
+
+  /** Reads each guideline file of the page once and gives it to the platform: a file it has not seen is read by the AI and becomes editing rules for the client
+      (drafts, used for editing at once); a file it knows costs one small request. A new project of a client is learned the same way, without any set-up. */
+  async function learnGuidelines() {
+    S.gl = []
+    for (const g of guidelineLinks()) {
+      const item = { name: g.label, url: g.url, sha: null, status: 'error', rules: 0, learned: [], message: null, newProject: false }
+      S.gl.push(item)
+      try {
+        const r = await fetch(g.url, { credentials: 'include' })
+        if (!r.ok) throw new Error('The website returned ' + r.status + ' for the guideline file.')
+        const blob = await r.blob()
+        if (blob.size > 6_000_000) throw new Error('The guideline file is larger than 6 MB.')
+        item.sha = hex(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))
+        const body = { client_hint: clientHint(), project: projectName(), sha256: item.sha, filename: decodeURIComponent(g.url.split('?')[0].split('/').pop() || 'guidelines.pdf'), source_url: g.url }
+        let a = await api('POST', '/api/ext/guidelines/learn', body)
+        if (a.ok && a.data.status === 'need_content') {
+          set(bodyEl, card('', el('span', { class: 'spin' }), 'New guideline file: the AI is reading it and writing the client’s editing rules … (one time only)'))
+          a = await api('POST', '/api/ext/guidelines/learn', { ...body, content_b64: await toB64(blob) })
+        }
+        if (!a.ok) throw new Error(a.error || 'The platform did not accept the guideline file.')
+        Object.assign(item, { status: a.data.status, rules: a.data.rules || 0, learned: a.data.learned || [], message: a.data.message || null, newProject: !!a.data.new_project })
+      } catch (e) { item.message = (e && e.message) || String(e) }
+    }
+    return S.gl
+  }
+  const guidelineShas = () => (S.gl || []).filter((g) => g.sha).map((g) => g.sha.slice(0, 16))
+  function projectName() {
+    const h = document.querySelector('.white16bold')
+    return ((h ? h.textContent : document.title) || '').replace(/\s+/g, ' ').trim().slice(0, 160)
+  }
+
   // ------------------------------------------------------------------------------------------------ sign in / check
   function signIn(message) {
     const email = el('input', { type: 'email', placeholder: 'you@isngs.com', autocomplete: 'username' })
@@ -174,7 +228,7 @@
     set(bodyEl, card('', el('span', { class: 'spin' }), `Checking ${S.rows.length} answer${S.rows.length === 1 ? '' : 's'}…`))
     setBadge(null)
     const r = await api('POST', '/api/ext/text/propose', {
-      client_hint: clientHint(), rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
+      client_hint: clientHint(), guidelines: guidelineShas(), rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
       answers: S.rows.map((x) => ({ id: x.id, question: x.question, text: x.ta.value })),
     })
     S.busy = false
@@ -367,7 +421,7 @@
   async function reedit(e, text) {
     const row = rowOf(e.qid)
     const r = await api('POST', '/api/ext/text/propose', {
-      client_hint: clientHint(), client_id: S.info && S.info.company ? S.info.company.client_id : null,
+      client_hint: clientHint(), guidelines: guidelineShas(), client_id: S.info && S.info.company ? S.info.company.client_id : null,
       item_feedback: [{ id: e.id, original: e.original, replacement: e.replacement, comment: text }], rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
       answers: [{ id: row.id, question: row.question, text: row.ta.value }],
     })
@@ -435,6 +489,7 @@
           : `Only the general grammar rules were used (${i.rules_used}). The page header names no client that is set up in the platform.`),
         i.pending_rules ? el('div', { class: 'small', style: 'margin-top:4px' }, `${i.pending_rules} checklist rule${i.pending_rules === 1 ? ' is' : 's are'} still waiting for the Super Admin's approval; they are used for editing, not for QC.`) : null))
       if (i.message) parts.push(card('warn', i.message))
+      parts.push(...guidelineCards())
       const open = S.edits.filter((e) => e.state !== 'dismissed')
       parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. Accept writes the fix into the box; nothing is saved on the website until you save.`))
       let last = null
@@ -452,6 +507,22 @@
     }
     set(bodyEl, noteCard(), ...parts)
     renderFoot()
+  }
+
+  /** What the extension did with the guideline files of this page, in plain words. */
+  function guidelineCards() {
+    if (!S.gl) return []
+    if (!S.gl.length) return [card('', el('div', { class: 'small muted' }, 'No guideline file is linked on this page, so only the client’s existing rules apply.'))]
+    return S.gl.map((g) => {
+      const fine = g.status === 'learned' ? el('div', {}, el('b', {}, `Learned ${g.rules} editing rule${g.rules === 1 ? '' : 's'} from “${g.name}”. `),
+        el('span', { class: 'small' }, g.newProject ? 'This project was new: ' : '', 'they are used for editing now and count in QC after approval.'),
+        el('ul', { class: 'small', style: 'margin:4px 0 0 16px;padding:0' }, ...g.learned.map((r) => el('li', {}, r.name))))
+        : g.status === 'known' ? el('div', { class: 'small' }, `Guidelines “${g.name}”: already known to the platform (${g.rules} rule${g.rules === 1 ? '' : 's'}).`, g.newProject ? ' This project was added.' : '')
+        : g.status === 'no_rules' ? el('div', { class: 'small' }, `Guidelines “${g.name}” were read: no editing rules in them.`)
+        : null
+      if (fine) return card(g.status === 'learned' ? 'ok' : 'info', fine)
+      return card('warn', el('div', { class: 'small' }, `Guidelines “${g.name}”: `, g.message || (g.status === 'no_client' ? 'this client is not set up in the platform.' : 'could not be learned.')))
+    })
   }
 
   // ------------------------------------------------------------------------------------------------ save on the website + download its PDF
@@ -549,6 +620,13 @@
     S.session = s && s.user
     if (!S.session) { document.body.append(host); return signIn() }
     document.body.append(host)
+    setBadge(null)
+    if (!S.gl) {
+      set(bodyEl, card('', el('span', { class: 'spin' }), 'Looking for this client’s guidelines on the website …'))
+      setPanel(true)
+      await learnGuidelines()
+      renderPanel()
+    }
     check()
   }
   // The badge is always there on Intelli-Shop pages (dimmed when this page has no answer boxes), so it is clear the extension runs; the panel says what is missing.

@@ -55,11 +55,12 @@ def _tokens(answers: list[dict]) -> list[Tok]:
 
 
 def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = None, client_id: int | None = None,
-                 feedback: str | None = None, rejected: list[dict] | None = None, item_feedback: list[dict] | None = None) -> dict:
+                 feedback: str | None = None, rejected: list[dict] | None = None, item_feedback: list[dict] | None = None,
+                 guidelines: list[str] | None = None) -> dict:
     answers = [a for a in answers if str(a.get("text") or "").strip()]
     company = match_client(db, client_hint, client_id)
     cid = company["client_id"] if company else None
-    rules = rules_for_company(db, cid)
+    rules = rules_for_company(db, cid, guidelines={str(g)[:16] for g in (guidelines or [])})
     rejected = rejected or []
     rej = {(str(r.get("original", "")).strip().lower(), str(r.get("replacement", "")).strip().lower()) for r in rejected}
     toks = _tokens(answers)
@@ -101,6 +102,6 @@ def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = 
                       "before": " ".join(t.text for t in toks[max(0, o.i1 - 3):o.i1] if t.page == page),
                       "after": " ".join(t.text for t in toks[o.i2:o.i2 + 3] if t.page == page)})
     return {"edits": edits, "skipped": (rule_skipped + ai_skipped + overlap)[:60], "company": company, "rules_used": len(rules["rules"]),
-            "company_rules": rules["company_rules"], "pending_rules": len(rules["pending_approval"]), "rules": rules["rules"],
+            "company_rules": rules["company_rules"], "learned_rules": sum(1 for r in rules["rules"] if r.get("learned")), "pending_rules": len(rules["pending_approval"]), "rules": rules["rules"],
             "engine": "ai+rules" if provider is not None and ai_meta else "rules", "ai_model": ai_meta.get("model") if ai_meta else None,
             "ai_status": ai_status.value if hasattr(ai_status, "value") else str(ai_status), "message": message, "answers": len(answers)}

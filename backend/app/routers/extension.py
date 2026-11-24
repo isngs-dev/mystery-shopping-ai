@@ -1,6 +1,9 @@
 """API of the Chrome extension (see services/ext_assist.py). Authenticated with a bearer token from POST /api/ext/login."""
 from __future__ import annotations
 
+import base64
+import binascii
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -11,7 +14,7 @@ from ..deps import get_current_user, needs
 from ..models import Form, User
 from ..permissions import get_form_or_404, has_perm
 from ..security import create_token
-from ..services import ext_assist, ext_review, ext_text
+from ..services import ext_assist, ext_guidelines, ext_review, ext_text
 from ..services.ai import resolve_provider
 from . import auth as auth_router
 
@@ -85,6 +88,31 @@ class TextProposeIn(BaseModel):
     feedback: str | None = Field(default=None, max_length=3000)
     rejected: list[dict] = Field(default_factory=list, max_length=100)
     item_feedback: list[dict] = Field(default_factory=list, max_length=60)
+    guidelines: list[str] = Field(default_factory=list, max_length=6)       # fingerprints of the guideline files this page links (their learned rules apply)
+
+
+class GuidelineIn(BaseModel):
+    client_hint: str | None = Field(default=None, max_length=300)
+    project: str | None = Field(default=None, max_length=200)             # the page header: the project / shop type
+    sha256: str = Field(default="", max_length=64)
+    filename: str | None = Field(default=None, max_length=200)
+    source_url: str | None = Field(default=None, max_length=1000)
+    content_b64: str | None = Field(default=None, max_length=9_000_000)     # sent only when the platform asked for it (a file it has not seen)
+
+
+@router.post("/guidelines/learn")
+def learn_guidelines(body: GuidelineIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """The extension found the client's guideline file on the provider's website. Known file: nothing to do. New file: the AI reads it once and drafts editing rules."""
+    content = None
+    if body.content_b64:
+        try:
+            content = base64.b64decode(body.content_b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(422, "The file content is not valid base64.")
+        if len(content) > 6_500_000:
+            raise HTTPException(413, "The guideline file is too large.")
+    return ext_guidelines.learn(db, user, client_hint=body.client_hint, project=body.project, sha256=body.sha256, filename=body.filename,
+                                source_url=body.source_url, content=content)
 
 
 @router.post("/text/propose")
@@ -93,7 +121,7 @@ def propose_text(body: TextProposeIn, user: User = Depends(needs("docs.ai_edit")
     if sum(len(a.text) for a in body.answers) > 90000:
         raise HTTPException(413, "This form has too much text for one check.")
     return ext_text.propose_text(db, answers=[a.model_dump() for a in body.answers], client_hint=body.client_hint, client_id=body.client_id,
-                                 feedback=body.feedback, rejected=body.rejected, item_feedback=body.item_feedback)
+                                 feedback=body.feedback, rejected=body.rejected, item_feedback=body.item_feedback, guidelines=body.guidelines)
 
 
 def _guard(db: Session, user: User, form_id: int):

@@ -452,3 +452,23 @@ class ProjectReviewer(Base):
     reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     assigned_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     assigned_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WebGuideline(Base):
+    """A client's guideline file found on a mystery-shopping provider's website (the "Download Guidelines" link of a shop review page) and what the
+    AI learned from it. One row per (client, file content): the same file seen again is not read again; a new project that links the same file is
+    added to `projects`. The rules it produced are ordinary rule versions waiting for approval (`rule_keys`)."""
+    __tablename__ = "web_guidelines"
+    __table_args__ = (UniqueConstraint("client_id", "sha256"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    filename: Mapped[str] = mapped_column(String(200), default="")
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    projects: Mapped[list] = mapped_column(JSON, default=list)       # the project names (page headers) that use this file
+    text_chars: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)    # the file's text (capped), kept so the rules can be re-derived and audited
+    rule_keys: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="learned")   # learned | no_rules | unreadable
+    learned_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    learned_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

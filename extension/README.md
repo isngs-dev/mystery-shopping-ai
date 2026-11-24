@@ -70,6 +70,15 @@ Nothing reaches the website's record until you press **Save to site & download P
 If the website does not reload within 20 seconds (a required answer, a warning) nothing is downloaded and the panel says so.
 Sign in once from the round badge. After updating the extension, reload it and refresh the Intelli-Shop tab.
 
+### Guidelines are found and learned by themselves
+On every shop page the extension looks for the client's guideline file ("Download Guidelines" -> the client brief PDF), reads it with the signed-in
+website session and sends its fingerprint (`POST /api/ext/guidelines/learn`). A file the platform has already seen costs one small request. An **unseen file**
+(a new project of a client, or an updated brief) is uploaded once; the platform's AI reads it and drafts the client's **editing rules** (spelling of brand
+names, forbidden terms, tense, punctuation, topics that must not appear ...; nothing about what the shopper must do on the visit). The rules are created as
+*pending approval* (used for editing at once, counted in QC after the Super Admin approves them), apply only to pages that link that file, and are listed in
+the panel ("Learned N editing rules from ..."). The file's text is data for the AI, never instructions. Nothing is set up by hand; a client that is not in the
+platform is reported ("client not set up"), never created.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part
