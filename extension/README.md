@@ -96,6 +96,15 @@ dies after 5 wrong tries, and at most 3 codes are sent per account per hour. **T
 `SMTP_PASSWORD`, `SMTP_FROM` in the host's environment; for Google Workspace use smtp.gmail.com:587 and an App Password). Without it nothing is e-mailed: the person is told
 so and the Super Admins get an in-app notification and can reset the password in Admin → Users.
 
+### Upload guidelines, checklists & rules for any client
+The **Rules & guidelines** tab has an **Upload** section: choose files (PDF, Word `.docx`, Excel `.xlsx`, text; many at once, or a whole folder), type the client
+(the page's client is suggested; a list of the platform's clients helps), choose *Whole client* or *This project only* and press **Upload & learn**. The AI reads each file
+(a long checklist in pieces) and turns it into editing rules for that client (`POST /api/ext/guidelines/upload`). From then on **every form whose header names that client
+follows those rules** (the client is recognised from the page header / site name, exactly as before), whichever project it belongs to. Options: take the client from each
+file's name when it names one; create the client when its name is new (Managers). The rules are drafts: used for editing at once, counted in QC after the Super Admin approves
+them (Rules page, bulk approval). The tab lists the files of the client with **Remove** (its rules stop being used; the uploader or a Manager). Same file twice = added once.
+**Accept all N edits** writes every open suggestion into the answer boxes in one go (each can still be undone); then **Save to site & download PDF**.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part

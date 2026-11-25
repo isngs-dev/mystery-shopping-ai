@@ -86,6 +86,8 @@
   .pw { position: relative; } .pw input { padding-right: 56px; }
   .pw .eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: #0f8a69; font-size: 12px; font-weight: 700; padding: 4px 8px; }
   .oktext { color: #067a55; font-size: 12px; min-height: 1em; }
+  .filebtn { display: inline-block; margin: 0; font-weight: 600; font-size: 12px; border: 1px solid #d1d5db; border-radius: 999px; padding: 4px 12px; cursor: pointer; background: #fff; }
+  .filebtn:hover { background: #f3f4f6; } .filebtn input { display: none; }
   .usednote { font-size: 12px; background: #fffbe6; border: 1px solid #f2e3a3; border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
   .rulerow { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f2f5; }
   `
@@ -589,8 +591,103 @@
       await check()
     } else st.textContent = d.message || 'Not added.'
   }
+  // ---- upload of guidelines / checklists / rules & regulations (any client): the AI turns them into rules that apply to every form of that client
+  const UP_EXT = /\.(pdf|docx|xlsx|txt|md|csv)$/i
+  const clientNow = () => (S.info && S.info.company ? S.info.company : null)
+  function uploadCard(i) {
+    const suggest = (clientNow() && clientNow().client) || (projectName().split(':')[0] || '').trim()
+    const name = el('input', { type: 'text', list: 'msai-clients', placeholder: 'Client name, e.g. Discount Tire', autocomplete: 'off' })
+    name.value = suggest
+    const dl = el('datalist', { id: 'msai-clients' })
+    const auto = el('input', { type: 'checkbox' })
+    const create = el('input', { type: 'checkbox' }); create.checked = true
+    const createRow = el('label', { style: 'display:none;font-weight:400;margin:4px 0' }, create, ' Create the client if it is new')
+    const scope = el('select', {}, el('option', { value: 'client' }, 'Whole client (all its projects)'), el('option', { value: 'project' }, 'This project only'))
+    scope.style.cssText = 'font:inherit;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff;width:100%'
+    const pick = el('input', { type: 'file', multiple: 'multiple', accept: '.pdf,.docx,.xlsx,.txt,.md,.csv' })
+    const folder = el('input', { type: 'file', multiple: 'multiple' }); folder.setAttribute('webkitdirectory', '')
+    const status = el('div', { class: 'small', style: 'margin-top:6px' })
+    const go = el('button', { class: 'primary' }, 'Upload & learn')
+    let chosen = []
+    const show = () => { status.textContent = chosen.length ? `${chosen.length} file${chosen.length === 1 ? '' : 's'} ready: ${chosen.slice(0, 3).map((f) => f.name).join(', ')}${chosen.length > 3 ? ' …' : ''}` : '' }
+    const take = (list) => { chosen = [...list].filter((f) => UP_EXT.test(f.name) && !f.name.startsWith('~$')).slice(0, 60); show(); if (!chosen.length) status.textContent = 'No PDF, Word, Excel or text file in that choice.' }
+    pick.addEventListener('change', () => take(pick.files))
+    folder.addEventListener('change', () => take(folder.files))
+    const log = el('div', { class: 'small', style: 'margin-top:6px' })
+    const paint = () => log.replaceChildren(...(S.upLog || []).map((l) => el('div', { class: 'rulerow' }, l.busy ? el('span', { class: 'spin' }) : el('span', { class: 'chip ' + (l.good ? 'rules' : '') }, l.good ? '✓' : '✗'),
+      el('span', { style: 'flex:1' }, l.name), el('span', { class: 'muted' }, l.text || ''))))
+    paint()                                                                     // the result of the last upload stays visible after the panel is redrawn
+    go.addEventListener('click', async () => {
+      if (!chosen.length) { status.textContent = 'Choose the files (or a folder) first.'; return }
+      if (!auto.checked && name.value.trim().length < 3) { status.textContent = 'Type the client name these belong to.'; return }
+      go.disabled = true
+      S.upLog = []
+      let ok = 0
+      for (const f of chosen) {
+        const line = { name: f.name, busy: true, text: 'reading …' }
+        S.upLog.push(line); paint()
+        let res
+        try {
+          if (f.size > 6_000_000) throw new Error('larger than 6 MB')
+          res = await api('POST', '/api/ext/guidelines/upload', { client_name: name.value.trim(), filename: f.name, content_b64: await toB64(f), scope: scope.value,
+            project: projectName(), create: create.checked, auto: auto.checked })
+        } catch (e) { res = { ok: false, error: (e && e.message) || String(e) } }
+        const d = res.ok ? res.data : { status: 'error', message: res.error }
+        const good = d.status === 'learned' || d.status === 'known' || d.status === 'no_rules'
+        if (good) ok++
+        Object.assign(line, { busy: false, good, text: d.status === 'learned' ? `${d.rules} rules${d.created_client ? ' · client created' : ''} → ${d.client}` : d.status === 'known' ? `already added (${d.rules} rules) → ${d.client}`
+          : d.status === 'no_rules' ? 'read: no editing rules in it' : (d.message || d.status) })
+        paint()
+      }
+      go.disabled = false
+      const total = chosen.length
+      S.note = { kind: ok === total ? 'ok' : 'warn', text: `${ok} of ${total} file${total === 1 ? '' : 's'} added. They are used for editing now and count in QC after approval; every form of that client follows them and the answers were checked again.` }
+      chosen = []; pick.value = ''; folder.value = ''
+      await check()
+    })
+    ;(async () => {
+      const r = await api('GET', '/api/ext/clients')
+      if (!r.ok) return
+      dl.replaceChildren(...r.data.clients.map((c) => el('option', { value: c.name })))
+      if (r.data.can_create) createRow.style.display = ''
+      if (!r.data.can_create) create.checked = false
+    })()
+    return card('', el('h3', {}, 'Upload guidelines, checklists & rules'),
+      el('div', { class: 'small', style: 'margin-bottom:6px' }, 'Upload a client’s guidelines, checklist or rules & regulations (PDF, Word, Excel or text; many files at once, or a whole folder). The AI turns them into editing rules, and from then on every form of that client follows them.'),
+      el('label', {}, 'Client'), name, dl,
+      el('label', { style: 'font-weight:400;margin:4px 0' }, auto, ' Take the client from each file’s name when it names one'), createRow,
+      el('label', {}, 'Applies to'), scope,
+      el('div', { class: 'acts' }, el('label', { class: 'filebtn' }, 'Choose files', pick), el('label', { class: 'filebtn' }, 'Choose a folder', folder)),
+      status, el('div', { class: 'acts' }, go), log)
+  }
+  /** The files this client's rules came from, with a Remove button (the rules of a removed file stop being used). */
+  function filesCard(i) {
+    const c = clientNow()
+    if (!c || !c.client_id) return null
+    const box = el('div', {}, el('div', { class: 'small muted' }, 'Loading …'))
+    ;(async () => {
+      const r = await api('GET', '/api/ext/guidelines/files?client_id=' + c.client_id)
+      if (!r.ok) { box.replaceChildren(el('div', { class: 'small muted' }, r.error || 'Could not load the files.')); return }
+      const files = r.data.files
+      if (!files.length) { box.replaceChildren(el('div', { class: 'small muted' }, 'No guideline file was added for ' + c.client + ' yet.')); return }
+      box.replaceChildren(...files.map((f) => {
+        const rm = el('button', { title: 'Remove this file and stop using its rules' }, 'Remove')
+        rm.addEventListener('click', async () => {
+          rm.disabled = true
+          const d = await api('DELETE', '/api/ext/guidelines/files/' + f.id)
+          if (!d.ok) { rm.disabled = false; rm.title = d.error || ''; rm.textContent = 'Not allowed'; return }
+          S.note = { kind: 'ok', text: `“${f.filename}” removed; its ${d.data.rules_retired} rule${d.data.rules_retired === 1 ? '' : 's'} are no longer used.` }
+          await check()
+        })
+        return el('div', { class: 'rulerow' }, el('span', { class: 'chip ' + (f.from_page ? 'ai' : 'rules') }, f.from_page ? 'Page link' : 'Uploaded'),
+          el('span', { style: 'flex:1' }, f.filename || 'file', el('span', { class: 'muted' }, ` · ${f.rules} rule${f.rules === 1 ? '' : 's'}${f.by ? ' · ' + f.by : ''}${f.status === 'unreadable' ? ' · unreadable' : ''}`)), rm)
+      }))
+    })()
+    return card('', el('h3', {}, 'Guideline files for ' + c.client), box)
+  }
+
   function rulesTab(i) {
-    const parts = [...guidelineCards()]
+    const parts = [uploadCard(i), filesCard(i), ...guidelineCards()].filter(Boolean)
     const box = el('textarea', { rows: '6', placeholder: 'One rule per line, for example:\nAlways write the brand as “Love’s Travel Stops”\nspelling: use “lemonade”, never “lemonaid”\nDo not mention alcohol; say “beverage”' })
     const scope = el('select', {}, el('option', { value: 'project' }, 'This project only'), el('option', { value: 'client' }, 'Whole client'))
     scope.style.cssText = 'font:inherit;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff'
@@ -636,6 +733,17 @@
       else parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `Following ${learned.reduce((n, g) => n + (g.rules || 0), 0)} rule${learned.length === 1 && learned[0].rules === 1 ? '' : 's'} learned from the client’s guidelines${i.manual_rules ? ` + ${i.manual_rules} typed by the team` : ''} (Rules tab).`))
       const open = S.edits.filter((e) => e.state !== 'dismissed')
       parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. Accept writes the fix into the box; nothing is saved on the website until you save.`))
+      if (nOpen > 1) {
+        const all = el('button', { class: 'primary', style: 'margin-bottom:8px' }, `Accept all ${nOpen} edits`)
+        all.title = 'Writes every open suggestion into its answer box; you can still Undo each one'
+        all.addEventListener('click', () => {
+          let n = 0
+          for (const e of S.edits.filter((x) => x.state === 'open')) { e.final = e.replacement; if (applyEdit(e)) n++ }
+          S.note = { kind: 'ok', text: `${n} edit${n === 1 ? '' : 's'} written into the answer boxes. Look them over, then press “Save to site & download PDF” below.` }
+          hideTip(); decided()
+        })
+        parts.push(all)
+      }
       let last = null
       for (const e of S.edits) {
         const row = rowOf(e.qid)

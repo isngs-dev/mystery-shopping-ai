@@ -278,11 +278,14 @@ def _unknown_new_words(ow: list[str], rw: list[str], allowed: set[str], spell) -
     return bad
 
 
+GUIDELINES_CHARS = 16000      # the client's rules reach the model up to this many characters (uploaded checklists make long rule lists)
+
+
 def ai_edits(provider, toks: list[Tok], pages, feedback: str | None, allowed_terms: set[str], protected: set[int] | None = None,
              guidelines: str | None = None, qa_text: str | None = None) -> tuple[list[EditOp], list[dict], dict]:
     prompt = ""
     if guidelines:
-        prompt += f"<company_guidelines>\n{_TAGS.sub('< ', guidelines)[:6000]}\n</company_guidelines>\n"
+        prompt += f"<company_guidelines>\n{_TAGS.sub('< ', guidelines)[:GUIDELINES_CHARS]}\n</company_guidelines>\n"
     # `qa_text`: the question / answer pairs when the form is not a PDF (an HTML form that already knows its questions)
     qa = qa_text if qa_text is not None else form_context.block_text(form_context.question_answers(toks, protected or set()))
     if qa:

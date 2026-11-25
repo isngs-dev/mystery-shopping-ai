@@ -309,6 +309,61 @@ def test_the_guideline_file_on_the_website_is_learned_once_into_draft_rules_that
         set_provider_override(None)
 
 
+def _docx(text):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", "<w:document><w:body>" + "".join(f"<w:p><w:r><w:t>{ln}</w:t></w:r></w:p>" for ln in text.split("\n")) + "</w:body></w:document>")
+    return buf.getvalue()
+
+
+def test_uploaded_guideline_files_become_rules_for_every_form_of_the_client_and_can_be_removed(api, ctx):
+    import base64
+
+    prov = LearnProvider()
+    set_provider_override(prov)
+    try:
+        b64 = lambda raw: base64.b64encode(raw).decode()                                                      # noqa: E731
+        boss, editor = _auth(_token("manager")), _auth(_token("qc"))
+        brief = _docx("\n".join(f"Rule {i}: write the brand as Discount Tire and never mention alcohol in any report you edit." for i in range(1, 8)))
+
+        assert editor("GET", "/api/ext/clients").json()["can_create"] is False and boss("GET", "/api/ext/clients").json()["can_create"] is True
+        refused = editor("POST", "/api/ext/guidelines/upload", json={"client_name": "Discount Tire", "filename": "dt.docx", "content_b64": b64(brief), "create": True}).json()
+        assert refused["status"] == "no_client" and "Manager" in refused["message"]                           # an editor cannot create a client
+        out = boss("POST", "/api/ext/guidelines/upload", json={"client_name": "Discount Tire", "filename": "Discount Tire guidelines.docx", "content_b64": b64(brief), "create": True}).json()
+        assert out["status"] == "learned" and out["created_client"] is True and out["client"] == "Discount Tire" and out["rules"] == 2
+        again = boss("POST", "/api/ext/guidelines/upload", json={"client_name": "discount tire", "filename": "copy.docx", "content_b64": b64(brief), "create": True}).json()
+        assert again["status"] == "known" and again["created_client"] is False                                # same file, same client: nothing new
+
+        form = {"client_hint": "Discount Tire: Phone Evaluation 2026 | insite.intelli-shop.com", "answers": [{"id": "1", "question": "Comments", "text": "The cashier greet me warmly."}]}
+        for project in ("Phone Evaluation 2026", "Some Other Project"):                                       # a form of the client, any project: its rules trigger
+            got = boss("POST", "/api/ext/text/propose", json={**form, "project": project}).json()
+            assert got["company"]["client"] == "Discount Tire" and got["manual_rules"] == 2
+        assert any("write the brand as Discount Tire" in u.lower() or "Write the brand as Acme Retail" in u for _, u in prov.prompts if "<company_guidelines>" in u)
+
+        cid = next(c["id"] for c in boss("GET", "/api/ext/clients").json()["clients"] if c["name"] == "Discount Tire")
+        files = boss("GET", f"/api/ext/guidelines/files?client_id={cid}").json()["files"]
+        assert len(files) == 1 and files[0]["rules"] == 2 and files[0]["filename"].startswith("Discount Tire")
+        assert editor("DELETE", f"/api/ext/guidelines/files/{files[0]['id']}").status_code == 403              # not the uploader and not a Manager
+        assert boss("DELETE", f"/api/ext/guidelines/files/{files[0]['id']}").json()["rules_retired"] == 2
+        assert boss("POST", "/api/ext/text/propose", json=form).json()["manual_rules"] == 0                  # the retired rules stop being used
+        assert boss("DELETE", f"/api/ext/guidelines/files/{files[0]['id']}").status_code == 404
+
+        # an editor can upload for an existing client; the client may be taken from the file name; a long checklist is read in pieces; old Word files are refused
+        long_text = "\n".join(f"Item {i}: always write the brand as Acme Retail and never mention alcohol in the report." for i in range(1, 500))
+        n0 = len(prov.prompts)
+        auto = editor("POST", "/api/ext/guidelines/upload", json={"client_name": "x", "auto": True, "filename": "Acme Retail checklist.txt", "content_b64": b64(long_text.encode())}).json()
+        assert auto["status"] == "learned" and auto["client"] == "Acme Retail" and len(prov.prompts) - n0 >= 2
+        old = editor("POST", "/api/ext/guidelines/upload", json={"client_name": "Acme Retail", "filename": "old.doc", "content_b64": b64(b"\xd0\xcf\x11\xe0 not really")}).json()
+        assert old["status"] == "unsupported"
+        assert editor("POST", "/api/ext/guidelines/upload", json={"client_name": "Acme Retail", "filename": "a.txt", "content_b64": "***"}).status_code == 422
+        assert _auth("bad")("GET", "/api/ext/clients").status_code == 401
+    finally:
+        set_provider_override(None)
+
+
 def test_rules_typed_in_the_rules_tab_apply_to_their_project_and_a_human_note_is_kept(api, ctx):
     prov = RoutingProvider()
     set_provider_override(prov)

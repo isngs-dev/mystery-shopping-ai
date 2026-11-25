@@ -141,6 +141,56 @@ def learn_guidelines(body: GuidelineIn, user: User = Depends(needs("docs.ai_edit
                                 source_url=body.source_url, content=content)
 
 
+class UploadIn(BaseModel):
+    client_name: str | None = Field(default=None, max_length=160)
+    client_id: int | None = None
+    filename: str = Field(max_length=200)
+    content_b64: str = Field(max_length=9_000_000)
+    scope: str = Field(default="client", pattern="^(client|project)$")
+    project: str | None = Field(default=None, max_length=200)
+    create: bool = False                                                   # create the client when its name is new (Managers)
+    auto: bool = False                                                     # take the client from the file name when it names one
+
+
+@router.get("/clients")
+def clients_list(user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """The clients of the platform (for the upload box of the Rules tab)."""
+    from sqlalchemy import select as _select
+
+    from ..models import Client
+
+    return {"clients": [{"id": c.id, "name": c.name} for c in db.execute(_select(Client).where(Client.is_active.is_(True)).order_by(Client.name)).scalars()],
+            "can_create": has_perm(user, "ext.rules")}
+
+
+@router.post("/guidelines/upload")
+def upload_guidelines(body: UploadIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """A guideline / checklist / rules file (PDF, Word, Excel, text) uploaded for a client: the AI turns it into editing rules that apply to every form of that client."""
+    try:
+        content = base64.b64decode(body.content_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "The file content is not valid base64.")
+    if len(content) > 6_500_000:
+        raise HTTPException(413, "The file is larger than 6 MB.")
+    return ext_guidelines.upload(db, user, client_name=body.client_name, client_id=body.client_id, filename=body.filename, content=content, scope=body.scope,
+                                 project=body.project, create=body.create, auto=body.auto, can_create=has_perm(user, "ext.rules"))
+
+
+@router.get("/guidelines/files")
+def guideline_files(client_id: int, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    return {"files": ext_guidelines.list_files(db, client_id)}
+
+
+@router.delete("/guidelines/files/{file_id}")
+def guideline_file_remove(file_id: int, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    out = ext_guidelines.remove_file(db, user, file_id, can_manage=has_perm(user, "ext.rules"))
+    if out["status"] == "forbidden":
+        raise HTTPException(403, out["message"])
+    if out["status"] == "not_found":
+        raise HTTPException(404, "That file is not there any more.")
+    return out
+
+
 class ManualRulesIn(BaseModel):
     client_hint: str | None = Field(default=None, max_length=300)
     project: str | None = Field(default=None, max_length=200)
