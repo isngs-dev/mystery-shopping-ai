@@ -454,6 +454,28 @@ def test_spacing_and_full_stop_rules_see_the_white_space_the_word_corrector_cann
     assert not [e for e in out["edits"] if e["qid"] in ("3", "4")]                                                       # an address and "N/A" are left alone
 
 
+def test_an_edit_marks_only_the_words_that_change_and_a_brand_spelling_is_left_alone(api, ctx):
+    class Wide(RoutingProvider):
+        def analyze(self, system, user):
+            self.prompts.append((system, user))
+            return AIResult(text=json.dumps({"edits": [
+                {"original": "for a oil change", "replacement": "for an oil change", "reason": "Article before a vowel sound", "category": "grammar", "confidence": 0.95},
+                {"original": "Correct- See below", "replacement": "Correct - See below", "reason": "Space around the dash", "category": "punctuation", "confidence": 0.95}]}), model="fake-1")
+
+    set_provider_override(Wide())
+    try:
+        call = _auth(_token("qc"))
+        text = "She asked for a oil change today.\nAbsolutely Correct- See below that I am sending it. Fake mail from iSN was read."
+        out = call("POST", "/api/ext/text/propose", json={"client_hint": "Acme Retail: Store 978", "answers": [{"id": "1", "question": "q", "text": text}]}).json()
+        by = {e["original"]: e for e in out["edits"]}
+        assert by["a"]["replacement"] == "an" and text[by["a"]["start"]:by["a"]["end"]] == "a"                     # not the whole phrase
+        assert "Correct-" in by and by["Correct-"]["replacement"] == "Correct -"                                        # and the dash fix is no longer refused as a "new proper word"
+        assert not any(e["original"] == "iSN" for e in out["edits"])                                                  # a brand written with a capital inside is not a typo
+        assert all(e["original"] != e["replacement"] for e in out["edits"])
+    finally:
+        set_provider_override(None)
+
+
 def test_rules_typed_in_the_rules_tab_apply_to_their_project_and_a_human_note_is_kept(api, ctx):
     prov = RoutingProvider()
     set_provider_override(prov)
@@ -507,7 +529,7 @@ def test_text_form_edits_for_a_web_page_form_with_character_positions(api, ctx):
         by = {e["original"]: e for e in out["edits"]}
         assert "recieved" in by and by["recieved"]["qid"] == "306378" and a1[by["recieved"]["start"]:by["recieved"]["end"]] == "recieved"
         ai = next(e for e in out["edits"] if e["source"] == "ai")
-        assert a1[ai["start"]:ai["end"]] == ai["original"] and ai["replacement"].startswith("The cashier greeted")
+        assert a1[ai["start"]:ai["end"]] == ai["original"] and ai["original"] == "greet" and ai["replacement"] == "greeted"      # only the word that changes is marked
         assert all(e["qid"] in ("306378", "302694") for e in out["edits"])
         by_site = call("POST", "/api/ext/text/propose", json={**body, "client_hint": "Master Form | acme-retail.com"}).json()
         assert by_site["company"]["client"] == "Acme Retail"                                           # the site name also names the client

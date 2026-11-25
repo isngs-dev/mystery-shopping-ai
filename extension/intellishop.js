@@ -88,6 +88,11 @@
   .oktext { color: #067a55; font-size: 12px; min-height: 1em; }
   .filebtn { display: inline-block; margin: 0; font-weight: 600; font-size: 12px; border: 1px solid #d1d5db; border-radius: 999px; padding: 4px 12px; cursor: pointer; background: #fff; }
   .filebtn:hover { background: #f3f4f6; } .filebtn input { display: none; }
+  .boxbadge { position: fixed; pointer-events: auto; cursor: pointer; width: 26px; height: 26px; border-radius: 50%; background: ${GREEN}; color: #fff; font: 800 13px/26px system-ui, Arial, sans-serif;
+    text-align: center; box-shadow: 0 1px 5px rgba(15,23,42,.35); user-select: none; z-index: 1; }
+  .boxbadge:hover { background: #0f8a69; } .boxbadge.ok { background: #fff; color: ${GREEN}; border: 2px solid ${GREEN}; line-height: 22px; }
+  .boxbadge .n { position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: #e5484d; color: #fff; font: 700 10px/16px system-ui, Arial, sans-serif; border: 1.5px solid #fff; }
+  .sug.cur { box-shadow: 0 0 0 2px ${GREEN}; } .q.cur { color: #0f8a69; }
   .more { display: none; } .more.open { display: block; }
   .linkbtn { border: 0; background: transparent; color: #0f8a69; font-weight: 600; font-size: 12px; padding: 3px 6px; } .linkbtn:hover { background: #eef7f3; }
   .usednote { font-size: 12px; background: #fffbe6; border: 1px solid #f2e3a3; border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
@@ -165,7 +170,7 @@
     for (const t of document.querySelectorAll('textarea')) {
       n++
       if (t.closest('#msai-shop-host') || t.offsetParent === null || t.readOnly || t.disabled || t.value.trim().split(/\s+/).length < 2) continue
-      if (/search|e-?mail|subject|password|captcha/i.test(t.name || '')) continue
+      if (/^(search|query)|^q$|password|captcha/i.test(t.name || '')) continue
       const q = /^Q\[/.test(t.name || '')
       const question = q ? questionOf(t) : labelOf0(t)
       if (SKIP_QUESTION.test(question)) continue
@@ -431,10 +436,49 @@
         kids.push(u)
       }
     }
+    // the small badge inside every box (like Grammarly's): the number of suggestions in that box; press it to jump to the next one
+    for (const row of S.rows) {
+      const tr = row.ta.getBoundingClientRect()
+      if (tr.bottom < 0 || tr.top > innerHeight || tr.width < 60 || tr.height < 20) continue
+      const open = S.edits.filter((e) => e.qid === row.id && e.state === 'open' && e.valid)
+      const b = el('div', { class: 'boxbadge' + (open.length ? '' : ' ok'), title: open.length ? `${open.length} suggestion${open.length === 1 ? '' : 's'} in this box: press to see the next one` : 'No suggestions in this box' },
+        'M', open.length ? el('span', { class: 'n' }, String(open.length)) : null)
+      b.style.cssText = `left:${tr.left + 8}px;top:${Math.max(tr.top + 4, Math.min(tr.bottom, innerHeight) - 34)}px`
+      b.addEventListener('mousedown', (ev) => {                                // mousedown: the layer is redrawn often, a click could be lost
+        ev.preventDefault(); ev.stopPropagation()
+        if (!open.length) return
+        S.badgeAt = S.badgeAt || {}
+        const k = (S.badgeAt[row.id] = ((S.badgeAt[row.id] ?? -1) + 1) % open.length)
+        focusEdit(open[k])
+      })
+      kids.push(b)
+    }
     layer.replaceChildren(...kids)
     trackCard()
   }
-  const visible = (e) => e.rects && e.rects.some((r) => r.top < innerHeight && r.top + r.height > 0 && r.left < innerWidth)
+
+  /** The panel follows the page: the box in the middle of the screen is highlighted in the list and scrolled to the top of it. */
+  function syncPanel() {
+    if (dead || S.tab !== 'edits' || wrap.classList.contains('hidden')) return
+    const mid = innerHeight * 0.45
+    let best = null, bestD = 1e9
+    for (const row of S.rows) {
+      const r = row.ta.getBoundingClientRect()
+      if (r.bottom < 0 || r.top > innerHeight) continue
+      const d = r.top <= mid && r.bottom >= mid ? 0 : Math.min(Math.abs(r.top - mid), Math.abs(r.bottom - mid))
+      if (d < bestD && S.edits.some((e) => e.qid === row.id && e.state !== 'dismissed')) { best = row; bestD = d }
+    }
+    const id = best ? best.id : null
+    for (const n of bodyEl.querySelectorAll('[data-qid]')) n.classList.toggle('cur', id !== null && n.getAttribute('data-qid') === id)
+    if (id !== null && id !== S.curQid) {
+      const first = [...bodyEl.querySelectorAll('.q[data-qid]')].find((n) => n.getAttribute('data-qid') === id)
+      if (first) { const top = Math.max(0, first.offsetTop - bodyEl.offsetTop - 8); if (bodyEl.scrollTo) bodyEl.scrollTo({ top, behavior: 'smooth' }); else bodyEl.scrollTop = top }
+    }
+    S.curQid = id
+  }
+  let syncT = null
+  const syncSoon = () => { clearTimeout(syncT); syncT = setTimeout(syncPanel, 160) }
+  const visible =(e) => e.rects && e.rects.some((r) => r.top < innerHeight && r.top + r.height > 0 && r.left < innerWidth)
 
   // ------------------------------------------------------------------------------------------------ the card
   function hideTip() { if (tip) { tip.remove(); tip = null } }
@@ -556,7 +600,7 @@
     }
     if (best) { S.seen.add(best.id); showCard(best, true) }
   }
-  addEventListener('scroll', () => { relayout(); autoSoon() }, true)
+  addEventListener('scroll', () => { relayout(); autoSoon(); syncSoon() }, true)
   addEventListener('resize', relayout)
   addEventListener('input', (ev) => { if (ev.target && ev.target.name && /^Q\[/.test(ev.target.name)) relayout() }, true)
   every(relayout, 400)
@@ -828,8 +872,8 @@
       let last = null
       for (const e of S.edits) {
         const row = rowOf(e.qid)
-        if (e.qid !== last) { last = e.qid; parts.push(el('div', { class: 'q' }, (row && row.question) || 'Answer')) }
-        const s = el('div', { class: 'sug ' + groupOf(e) + (e.state === 'dismissed' ? ' off' : '') },
+        if (e.qid !== last) { last = e.qid; parts.push(el('div', { class: 'q', 'data-qid': e.qid }, (row && row.question) || 'Answer')) }
+        const s = el('div', { class: 'sug ' + groupOf(e) + (e.state === 'dismissed' ? ' off' : ''), 'data-qid': e.qid },
           el('div', {}, el('span', { class: 'cat chip ' + (e.source === 'ai' ? 'ai' : 'rules') }, e.source === 'ai' ? 'AI' : 'Rules'), el('b', {}, labelOf(e))),
           el('div', {}, el('span', { class: 'del' }, e.original), ' → ', el('span', { class: 'add' }, e.state === 'accepted' ? e.final : e.replacement)),
           el('div', { class: 'small muted' }, (e.state === 'accepted' ? '✓ accepted · ' : e.state === 'dismissed' ? 'dismissed · ' : '') + (e.reason || '')), noteField(e))

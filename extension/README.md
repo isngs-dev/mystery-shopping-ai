@@ -118,6 +118,11 @@ shows the change with **Accept** / **Dismiss** (Accept writes the fix into the b
 every change. Besides spelling, grammar, punctuation and the client's rules, the built-in corrector now sees white space: **extra spaces between words**, a comma glued to the next word
 (`5pm,the`), a space before such a comma, and a last sentence without its full stop. If the AI could not learn a page's guidelines, the panel shows the reason.
 
+### Like Grammarly: a badge in every box, precise marks, a panel that follows the page
+Each text box shows a small round **M** badge in its bottom-left corner with the number of suggestions (press it to jump to the next one; a hollow badge means none). An edit marks only the
+words that change (`a` -> `an`, `5pm,the` -> `5pm, the`), not the whole phrase. The right panel follows the page: the box in the middle of the screen is highlighted in the list and scrolled
+to the top. A word with a capital inside (`iSN`, `eBay`) is treated as a brand, not a typo, and a dash-spacing fix such as `Correct- See` is no longer refused as "a new proper word".
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part

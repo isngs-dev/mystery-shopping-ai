@@ -90,6 +90,22 @@ def char_rules(toks: list[Tok], answers: list[dict], covered: set[int]) -> list[
     return ops
 
 
+def _narrow(op: auto_editor.EditOp, toks: list[Tok]) -> auto_editor.EditOp:
+    """An edit marks only the words that change (like Grammarly): the words the replacement shares with the start and the end of the original are cut off
+    (at least one word is kept on each side), so "for a oil change" -> "for an oil change" becomes just "a" -> "an"."""
+    o = [t.text for t in toks[op.i1:op.i2]]
+    r = op.replacement.split()
+    p = 0
+    while p < len(o) - 1 and p < len(r) - 1 and o[p] == r[p]:
+        p += 1
+    s = 0
+    while s < len(o) - p - 1 and s < len(r) - p - 1 and o[-1 - s] == r[-1 - s]:
+        s += 1
+    if (p == 0 and s == 0) or o[p:len(o) - s] == r[p:len(r) - s]:          # nothing to narrow, or the change is only the white space between words
+        return op
+    return auto_editor.EditOp(op.i1 + p, op.i2 - s, " ".join(r[p:len(r) - s]), " ".join(o[p:len(o) - s]), op.reason, op.category, op.confidence, op.source, op.page)
+
+
 def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = None, client_id: int | None = None,
                  feedback: str | None = None, rejected: list[dict] | None = None, item_feedback: list[dict] | None = None,
                  guidelines: list[str] | None = None, project: str | None = None) -> dict:
@@ -127,7 +143,7 @@ def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = 
             ai_ops, ai_skipped, ai_meta = auto_editor.ai_edits(provider, toks, pages, "\n".join(fb) or None, allowed, set(), guidelines_text(rules["rules"]) or None, qa_text=qa)
         except AIError as exc:
             message = f"AI model failed ({exc}). Only the built-in grammar corrector ran."
-    ops, overlap = auto_editor._resolve(rule_ops + ai_ops, toks)
+    ops, overlap = auto_editor._resolve([_narrow(o, toks) for o in rule_ops + ai_ops], toks)
     ops = [o for o in ops if (o.original.strip().lower(), o.replacement.strip().lower()) not in rej]
     edits = []
     for o in sorted(ops, key=lambda o: o.i1):

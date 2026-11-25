@@ -113,7 +113,7 @@ def rule_based_edits(toks: list[Tok], allowed_terms: set[str] | None = None, pro
         sentence_start = prev is None or prev.page != t.page or (prev.text.endswith((".", "!", "?")) and not initial)   # a capitalised word at a line start is a name, not a typo
 
         # --- spelling (only single, non-hyphenated alphabetic words)
-        if len(core) >= 3 and re.match(r"^[A-Za-z]+$", core) and not (len(core) > 1 and core.isupper()):
+        if len(core) >= 3 and re.match(r"^[A-Za-z]+$", core) and not (len(core) > 1 and core.isupper()) and not re.search(r"[A-Z]", core[1:]):   # "iSN", "eBay": a brand, not a typo
             lw = core.lower()
             proper = core[0].isupper() and not sentence_start
             if not proper and lw not in allowed and lw not in CONTRACTIONS and spell.unknown([lw]):
@@ -261,9 +261,10 @@ def _locate_all(toks: list[Tok], needle: str) -> list[tuple[int, int]]:
 def _unknown_new_words(ow: list[str], rw: list[str], allowed: set[str], spell) -> list[str]:
     """Words the AI introduced that are not dictionary words (or are new capitalised names): possible invented facts."""
     old = {_norm(w) for w in ow}
+    keys = {re.sub(r"[^a-z0-9']", "", w.lower()) for w in ow}                 # "Correct-" and "Correct" are the same word: punctuation around a word is not a new word
     bad: list[str] = []
     for k, w in enumerate(rw):
-        if _norm(w) in old:
+        if _norm(w) in old or re.sub(r"[^a-z0-9']", "", w.lower()) in keys:
             continue
         core = re.sub(r"[^A-Za-z'’-]", "", w).replace("’", "'")
         if not core or core.lower() in CONTRACTIONS:
