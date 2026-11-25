@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str | None = None
     bootstrap_admin_name: str = "Super Admin"
 
+    # Outgoing e-mail (password-reset codes). Without SMTP_HOST nothing is e-mailed: the Super Admins get an in-app notification instead.
+    # For Google Workspace use smtp.gmail.com, port 587 and an App Password (never the account password). Set these only in the host's environment.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None            # default: SMTP_USER
+    smtp_ssl: bool = False                  # true = implicit TLS (port 465); false = STARTTLS
+    reset_code_minutes: int = 30
+
     # Storage (local adapter by default; shared-drive / cloud adapters need approved credentials)
     storage_backend: Literal["local", "shared_drive", "s3"] = "local"
     storage_root: str = str(BACKEND_DIR / "data" / "storage")

@@ -83,6 +83,9 @@
   .tabs button { flex: 1; border-radius: 999px; font-weight: 600; } .tabs button.on { background: ${GREEN}; color: #fff; border-color: ${GREEN}; }
   .notefield { margin-top: 6px; } .notefield label { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: #64748b; } .notefield textarea { min-height: 38px; font-size: 12px; }
   .notefield .st { font-size: 11px; color: #6b7280; min-height: 1em; }
+  .pw { position: relative; } .pw input { padding-right: 56px; }
+  .pw .eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: #0f8a69; font-size: 12px; font-weight: 700; padding: 4px 8px; }
+  .oktext { color: #067a55; font-size: 12px; min-height: 1em; }
   .usednote { font-size: 12px; background: #fffbe6; border: 1px solid #f2e3a3; border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
   .rulerow { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f2f5; }
   `
@@ -204,26 +207,76 @@
   }
 
   // ------------------------------------------------------------------------------------------------ sign in / check
-  function signIn(message) {
+  /** A password box with a Show / Hide button, so what is typed can be checked. */
+  function pwField(placeholder, autocomplete) {
+    const input = el('input', { type: 'password', placeholder, autocomplete })
+    const tog = el('button', { type: 'button', class: 'eye', title: 'Show or hide the password' }, 'Show')
+    tog.addEventListener('click', () => { const show = input.type === 'password'; input.type = show ? 'text' : 'password'; tog.textContent = show ? 'Hide' : 'Show' })
+    return { input, node: el('div', { class: 'pw' }, input, tog) }
+  }
+  function signIn(message, prefillEmail, ok) {
     const email = el('input', { type: 'email', placeholder: 'you@isngs.com', autocomplete: 'username' })
-    const pass = el('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' })
-    const err = el('div', { class: 'errtext', style: 'margin-top:6px' }, message || '')
+    email.value = prefillEmail || ''
+    const pw = pwField('Password', 'current-password')
+    const err = el('div', { class: ok ? 'oktext' : 'errtext', style: 'margin-top:6px' }, message || '')
     const go = el('button', { class: 'primary' }, 'Sign in')
     const doLogin = async () => {
-      err.textContent = ''; go.disabled = true
-      const r = await send({ type: 'login', email: email.value.trim(), password: pass.value })
+      err.className = 'errtext'; err.textContent = ''; go.disabled = true
+      const r = await send({ type: 'login', email: email.value.trim(), password: pw.input.value })
       go.disabled = false
       if (!r.ok) { err.textContent = r.error || 'Sign-in failed.'; return }
       S.session = r.data.user
       check()
     }
     go.addEventListener('click', doLogin)
-    pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin() })
+    pw.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin() })
+    const forgot = el('a', { href: '#', style: 'font-size:12px;margin-left:10px' }, 'Forgot password?')
+    forgot.addEventListener('click', (e) => { e.preventDefault(); forgotView(email.value.trim()) })
     set(bodyEl, card('', el('h3', {}, 'Sign in to Mystery Shopping AI'), el('div', { class: 'small muted' }, 'Use your platform account (Editor, QC Reviewer, Manager or Admin).'),
-      el('label', {}, 'Email'), email, el('label', {}, 'Password'), pass, err, el('div', { style: 'margin-top:8px' }, go)))
+      el('label', {}, 'Email'), email, el('label', {}, 'Password'), pw.node, err, el('div', { style: 'margin-top:8px' }, go, forgot)))
     set(footEl)
     setBadge(null)
     setPanel(true)
+  }
+
+  /** Forgot password: the platform e-mails a one-time code to the account's address; the code + a new password sets it (this also lifts a lock-out). */
+  function forgotView(prefill, info) {
+    const email = el('input', { type: 'email', placeholder: 'you@isngs.com', autocomplete: 'username' })
+    email.value = prefill || ''
+    const msg = el('div', { class: 'small', style: 'margin-top:6px' }, info || '')
+    const send1 = el('button', { class: 'primary' }, 'Send reset code')
+    const back = el('a', { href: '#', style: 'font-size:12px;margin-left:10px' }, '← Back to sign in')
+    back.addEventListener('click', (e) => { e.preventDefault(); signIn('', email.value.trim()) })
+    send1.addEventListener('click', async () => {
+      if (!/.+@.+\..+/.test(email.value.trim())) { msg.className = 'errtext'; msg.textContent = 'Type the e-mail of your account.'; return }
+      send1.disabled = true; msg.className = 'small'; msg.textContent = 'Sending …'
+      const r = await send({ type: 'api', method: 'POST', path: '/api/ext/forgot', body: { email: email.value.trim() } })
+      send1.disabled = false
+      if (!r.ok) { msg.className = 'errtext'; msg.textContent = r.error || 'Could not send the code.'; return }
+      resetView(email.value.trim(), r.data.message)
+    })
+    set(bodyEl, card('', el('h3', {}, 'Forgot your password?'), el('div', { class: 'small muted' }, 'A one-time code is sent to your account’s e-mail address. Use it here to choose a new password.'),
+      el('label', {}, 'Email'), email, msg, el('div', { style: 'margin-top:8px' }, send1, back)))
+    set(footEl)
+  }
+  function resetView(emailAddr, info) {
+    const code = el('input', { type: 'text', placeholder: 'Code from the e-mail (XXXX-XXXX)', autocomplete: 'one-time-code' })
+    const pw = pwField('New password (10+ characters, Aa and a number)', 'new-password')
+    const msg = el('div', { class: 'small', style: 'margin-top:6px' }, info || '')
+    const go = el('button', { class: 'primary' }, 'Set new password')
+    const again = el('a', { href: '#', style: 'font-size:12px;margin-left:10px' }, 'Send a new code')
+    again.addEventListener('click', (e) => { e.preventDefault(); forgotView(emailAddr) })
+    go.addEventListener('click', async () => {
+      if (!code.value.trim() || !pw.input.value) { msg.className = 'errtext'; msg.textContent = 'Type the code and the new password.'; return }
+      go.disabled = true; msg.className = 'small'; msg.textContent = 'Saving …'
+      const r = await send({ type: 'api', method: 'POST', path: '/api/ext/reset', body: { email: emailAddr, code: code.value.trim(), new_password: pw.input.value } })
+      go.disabled = false
+      if (!r.ok) { msg.className = 'errtext'; msg.textContent = r.error || 'Could not set the password.'; return }
+      signIn('Password changed. Sign in with the new password.', emailAddr, true)
+    })
+    set(bodyEl, card('', el('h3', {}, 'Enter the code'), el('div', { class: 'small muted' }, 'for ' + emailAddr), msg,
+      el('label', {}, 'Code'), code, el('label', {}, 'New password'), pw.node, el('div', { style: 'margin-top:8px' }, go, again)))
+    set(footEl)
   }
 
   async function check(note) {

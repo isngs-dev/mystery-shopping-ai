@@ -88,6 +88,14 @@ answers are checked again straight away. Under every suggested edit (in the pane
 (why the edit is right or wrong, a problem met while editing); notes are kept with the page's job and written to the platform's audit trail
 (`POST /api/ext/text/note`), and "Ask AI" takes the note into account. The panel opens by itself on a shop form page.
 
+### Sign-in: Show password and Forgot password
+The sign-in box has a **Show / Hide** button on the password (to check what was typed) and a **Forgot password?** link (on the Drive panel and on the Intelli-Shop /
+cxeVIEW panel). The link e-mails a one-time code (`POST /api/ext/forgot`) to the account's address; the code + a new password (`POST /api/ext/reset`) sets the
+password, signs out every old session and lifts a "Too many failed attempts" lock-out. The answer is the same for any e-mail, a code works once for 30 minutes,
+dies after 5 wrong tries, and at most 3 codes are sent per account per hour. **The server needs an SMTP mailbox** (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+`SMTP_PASSWORD`, `SMTP_FROM` in the host's environment; for Google Workspace use smtp.gmail.com:587 and an App Password). Without it nothing is e-mailed: the person is told
+so and the Super Admins get an in-app notification and can reset the password in Admin → Users.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part

@@ -14,7 +14,7 @@ from ..deps import get_current_user, needs
 from ..models import Form, User
 from ..permissions import get_form_or_404, has_perm
 from ..security import create_token
-from ..services import ext_assist, ext_guidelines, ext_review, ext_text
+from ..services import ext_assist, ext_guidelines, ext_review, ext_text, password_reset
 from ..services.ai import resolve_provider
 from . import auth as auth_router
 
@@ -44,6 +44,31 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     if not has_perm(user, "docs.ai_edit"):
         raise HTTPException(403, "Your role cannot use the editing extension.")
     return {"token": create_token(user.id, user.token_version), "user": {**out["user"], **_caps(user)}, "ai": _ai_state()}
+
+
+class ForgotIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+
+
+class ResetIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    code: str = Field(min_length=4, max_length=20)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/forgot")
+def forgot(body: ForgotIn, request: Request, db: Session = Depends(get_db)):
+    """Forgot password: e-mails a one-time code to the account's address (same answer for any e-mail)."""
+    return password_reset.request_code(db, body.email, request.client.host if request.client else None)
+
+
+@router.post("/reset")
+def reset(body: ResetIn, db: Session = Depends(get_db)):
+    """Sets a new password with the e-mailed code; this also lifts the failed-login lock-out."""
+    try:
+        return password_reset.confirm(db, body.email, body.code, body.new_password)
+    except password_reset.ResetError as exc:
+        raise HTTPException(exc.status, exc.message)
 
 
 @router.get("/me")
