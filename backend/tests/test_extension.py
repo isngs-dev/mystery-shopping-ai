@@ -309,6 +309,43 @@ def test_the_guideline_file_on_the_website_is_learned_once_into_draft_rules_that
         set_provider_override(None)
 
 
+def test_rules_typed_in_the_rules_tab_apply_to_their_project_and_a_human_note_is_kept(api, ctx):
+    prov = RoutingProvider()
+    set_provider_override(prov)
+    try:
+        call = _auth(_token("qc"))
+        hint = "Acme Retail: Store 978 - Carlin NV"
+        add = call("POST", "/api/ext/guidelines/manual", json={"client_hint": hint, "project": "Store 978 - Carlin NV", "scope": "project",
+                                                                  "text": "- Always write the brand as Acme Retail\nspelling: Use 'lemonade' not 'lemonaid'\nab\n"}).json()
+        assert add["status"] == "added" and add["added"] == 2 and add["scope"] == "project" and add["rules"][1]["type"] == "Spelling"
+        again = call("POST", "/api/ext/guidelines/manual", json={"client_hint": hint, "project": "Store 978 - Carlin NV", "text": "- Always write the brand as Acme Retail\nspelling: Use 'lemonade' not 'lemonaid'"}).json()
+        assert again["status"] == "known" and again["added"] == 0                                                          # the same lines twice make no duplicates
+        assert call("POST", "/api/ext/guidelines/manual", json={"client_hint": "Unknown Brand", "text": "Some long rule here"}).json()["status"] == "no_client"
+        assert call("POST", "/api/ext/guidelines/manual", json={"client_hint": hint, "text": "   \n a \n"}).json()["status"] == "empty"
+        whole = call("POST", "/api/ext/guidelines/manual", json={"client_hint": hint, "project": "Store 978 - Carlin NV", "scope": "client", "text": "Never describe an associate by weight"}).json()
+        assert whole["scope"] == "client"
+
+        form = {"client_hint": hint, "answers": [{"id": "1", "question": "Comments", "text": "The cashier greet me warmly at the door."}]}
+        same = call("POST", "/api/ext/text/propose", json={**form, "project": "Store 978 - Carlin NV"}).json()
+        assert same["manual_rules"] == 3 and all(r["status"] == "draft" for r in same["rules"] if r.get("manual"))
+        other = call("POST", "/api/ext/text/propose", json={**form, "project": "Store 12 - Reno NV"}).json()
+        assert other["manual_rules"] == 1                                                                                   # only the whole-client rule follows to another project
+        assert call("POST", "/api/ext/text/propose", json=form).json()["manual_rules"] == 1
+        assert any("Always write the brand as Acme Retail" in u for _, u in prov.prompts if "<company_guidelines>" in u)   # typed rules reach the editor model
+
+        n = call("POST", "/api/ext/text/note", json={"client_hint": hint, "project": "Store 978", "job": "639267", "original": "greet", "replacement": "greeted",
+                                                      "decision": "dismissed", "text": "The shopper wrote this in present tense on purpose: quoted speech."})
+        assert n.status_code == 200 and n.json()["saved"] is True
+        from app.models import AuditEvent
+        db = SessionLocal()
+        ev = db.execute(select(AuditEvent).where(AuditEvent.action == "ext.edit_note")).scalars().all()
+        assert len(ev) == 1 and ev[0].detail["note"].startswith("The shopper wrote") and ev[0].detail["decision"] == "dismissed"
+        db.close()
+        assert _auth("bad")("POST", "/api/ext/text/note", json={"original": "a", "text": "b"}).status_code == 401
+    finally:
+        set_provider_override(None)
+
+
 def test_text_form_edits_for_a_web_page_form_with_character_positions(api, ctx):
     """Intelli-Shop style page: questions + answers in, edits with character ranges inside each answer out; the client comes from the page header."""
     prov = RoutingProvider()

@@ -89,6 +89,7 @@ class TextProposeIn(BaseModel):
     rejected: list[dict] = Field(default_factory=list, max_length=100)
     item_feedback: list[dict] = Field(default_factory=list, max_length=60)
     guidelines: list[str] = Field(default_factory=list, max_length=6)       # fingerprints of the guideline files this page links (their learned rules apply)
+    project: str | None = Field(default=None, max_length=200)             # the page header (project / shop type): rules typed for that project apply
 
 
 class GuidelineIn(BaseModel):
@@ -115,13 +116,44 @@ def learn_guidelines(body: GuidelineIn, user: User = Depends(needs("docs.ai_edit
                                 source_url=body.source_url, content=content)
 
 
+class ManualRulesIn(BaseModel):
+    client_hint: str | None = Field(default=None, max_length=300)
+    project: str | None = Field(default=None, max_length=200)
+    text: str = Field(max_length=12000)
+    scope: str = Field(default="project", pattern="^(project|client)$")
+
+
+@router.post("/guidelines/manual")
+def add_manual_rules(body: ManualRulesIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """Rules typed by a person (the Rules tab): one per line, for this project or the whole client. Drafts, used for editing at once."""
+    return ext_guidelines.add_manual(db, user, client_hint=body.client_hint, project=body.project, text=body.text, scope=body.scope)
+
+
+class NoteIn(BaseModel):
+    client_hint: str | None = Field(default=None, max_length=300)
+    project: str | None = Field(default=None, max_length=200)
+    job: str | None = Field(default=None, max_length=40)
+    question: str | None = Field(default=None, max_length=600)
+    original: str = Field(max_length=600)
+    replacement: str = Field(default="", max_length=600)
+    decision: str = Field(default="open", max_length=20)
+    text: str = Field(max_length=2000)
+
+
+@router.post("/text/note")
+def edit_note(body: NoteIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """The person's own point of view on one suggested edit; kept in the audit trail."""
+    return ext_guidelines.note(db, user, client_hint=body.client_hint, project=body.project, job=body.job, question=body.question, original=body.original,
+                               replacement=body.replacement, decision=body.decision, text=body.text)
+
+
 @router.post("/text/propose")
 def propose_text(body: TextProposeIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
     """Edits for the answers of a web-page form. Stateless: nothing is stored or written; the page shows the edits and the person decides."""
     if sum(len(a.text) for a in body.answers) > 90000:
         raise HTTPException(413, "This form has too much text for one check.")
     return ext_text.propose_text(db, answers=[a.model_dump() for a in body.answers], client_hint=body.client_hint, client_id=body.client_id,
-                                 feedback=body.feedback, rejected=body.rejected, item_feedback=body.item_feedback, guidelines=body.guidelines)
+                                 feedback=body.feedback, rejected=body.rejected, item_feedback=body.item_feedback, guidelines=body.guidelines, project=body.project)
 
 
 def _guard(db: Session, user: User, form_id: int):

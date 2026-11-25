@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..audit import audit
 from ..db import utcnow
 from ..enums import RuleStatus
-from ..models import User, WebGuideline
+from ..models import QCRule, User, WebGuideline
 from . import error_taxonomy as tx, rules_service
 from .ai import AIError, resolve_provider
 from .ext_assist import GRAMMAR
@@ -59,6 +59,59 @@ def _text_of(content: bytes) -> str:
 
 def _clip(v, n: int) -> str:
     return re.sub(r"\s+", " ", str(v or "")).strip()[:n]
+
+
+MANUAL_LINES = 30
+GRAMMAR_WORDS = {t.replace("_", " "): t for t in GRAMMAR} | {t: t for t in GRAMMAR}
+
+
+def add_manual(db: Session, user: User, *, client_hint: str | None, project: str | None, text: str, scope: str = "project") -> dict:
+    """Rules typed into the extension's Rules tab (when the AI could not read the guidelines, or for something the file does not say): one rule per line,
+    for the project of the page or the whole client. No AI is needed, so it works when the model is down. They start as drafts like every other
+    extension rule: used for editing at once, counted in QC after approval. Start a line with a type ("spelling: ...", "past tense: ...") to set it;
+    the default is Terminology."""
+    company = match_client(db, client_hint)
+    if not company:
+        return {"status": "no_client", "message": "The page names no client that is set up in the platform, so rules cannot be added for it."}
+    cid = company["client_id"]
+    project = _clip(project, 160) or None
+    where = [project] if (scope == "project" and project) else []
+    lines = [re.sub(r"\s+", " ", ln).strip(" -•*\t") for ln in text.splitlines()]
+    lines = [ln for ln in lines if len(ln) >= 4][:MANUAL_LINES]
+    if not lines:
+        return {"status": "empty", "message": "Write at least one rule (one per line)."}
+    tag = hashlib.sha256(("|".join(where) + "\n" + "\n".join(lines)).encode()).hexdigest()
+    made, existing = [], 0
+    for n, ln in enumerate(lines, start=1):
+        sub = "terminology"
+        m = re.match(r"^([A-Za-z_ ]{4,20}):\s*(.+)$", ln)
+        if m and m.group(1).strip().lower() in GRAMMAR_WORDS:
+            sub, ln = GRAMMAR_WORDS[m.group(1).strip().lower()], m.group(2).strip()
+        key = f"WEB-M-{cid}-{tag[:8]}-{n}"
+        if db.execute(select(QCRule).where(QCRule.rule_key == key)).scalar_one_or_none():
+            existing += 1
+            continue
+        rv = rules_service.create_rule(
+            db, user, rule_key=key, name=_clip(ln, 90) + ("…" if len(ln) > 90 else ""), description=_clip(ln, 700), category=tx.category_of(sub).key,
+            error_subtype=sub, severity="minor", client_id=cid, project_id=None, form_type=None, check_type="ai_guideline",
+            config={"guideline": tag[:16], "manual": True, "projects": where}, effective_date=date.today(),
+            change_note=f"Added by {user.name} in the extension's Rules tab ({'project ' + where[0] if where else 'whole client'}): used for editing now, counted in QC after approval.")
+        rv.status, rv.submitted_at = RuleStatus.PENDING_APPROVAL.value, utcnow()
+        audit(db, user, "rule.created", entity_type="rule_version", entity_id=rv.id, detail={"rule_key": key, "via": "extension_manual"})
+        made.append({"name": rv.name, "type": tx.label(sub)})
+    db.commit()
+    return {"status": "added" if made else "known", "client": company["client"], "added": len(made), "existing": existing, "rules": made, "scope": "project" if where else "client"}
+
+
+def note(db: Session, user: User, *, client_hint: str | None, project: str | None, job: str | None, question: str | None, original: str, replacement: str,
+         decision: str, text: str) -> dict:
+    """A person's own point of view on one suggested edit (why they accept, reject or reword it). Kept in the audit trail so the team can see it."""
+    company = match_client(db, client_hint)
+    audit(db, user, "ext.edit_note", entity_type="web_form", entity_id=_clip(job, 40) or None,
+          detail={"client": company["client"] if company else None, "project": _clip(project, 160), "question": _clip(question, 300), "original": _clip(original, 300),
+                  "replacement": _clip(replacement, 300), "decision": _clip(decision, 20), "note": (text or "").strip()[:2000]})
+    db.commit()
+    return {"saved": True}
 
 
 def learn(db: Session, user: User, *, client_hint: str | None, project: str | None, sha256: str, filename: str | None, source_url: str | None,

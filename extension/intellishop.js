@@ -79,6 +79,12 @@
   .pop .top { display: flex; align-items: center; } .pop .top .x { margin-left: auto; padding: 0 6px; border: 0; background: transparent; color: #6b7280; font-size: 15px; }
   .pop .cat { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #64748b; }
   .pop .change { font-size: 16px; margin: 6px 0 4px; } .pop .reason { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+  .tabs { display: flex; gap: 4px; margin: -4px 0 10px; position: sticky; top: -12px; background: #f7f8fa; padding: 4px 0; z-index: 2; }
+  .tabs button { flex: 1; border-radius: 999px; font-weight: 600; } .tabs button.on { background: ${GREEN}; color: #fff; border-color: ${GREEN}; }
+  .notefield { margin-top: 6px; } .notefield label { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: #64748b; } .notefield textarea { min-height: 38px; font-size: 12px; }
+  .notefield .st { font-size: 11px; color: #6b7280; min-height: 1em; }
+  .usednote { font-size: 12px; background: #fffbe6; border: 1px solid #f2e3a3; border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
+  .rulerow { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f2f5; }
   `
 
   const host = document.createElement('div')
@@ -110,7 +116,7 @@
   wrap.append(el('header', {}, el('div', { class: 'logo' }, 'M'), el('div', { class: 'title' }, 'Mystery Shopping AI', subtitle), autoBtn, gear, minBtn), bodyEl, footEl)
   root.append(layer, wrap, badge)
 
-  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false, orig: new Map(), confirm: false, note: null }
+  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false, orig: new Map(), confirm: false, note: null, tab: 'edits', notes: {}, openedOnce: false }
   let tip = null, tipHover = null
 
   function setPanel(openIt) { wrap.classList.toggle('hidden', !openIt); badge.classList.toggle('panel-open', openIt); relayout() }
@@ -228,7 +234,7 @@
     set(bodyEl, card('', el('span', { class: 'spin' }), `Checking ${S.rows.length} answer${S.rows.length === 1 ? '' : 's'}…`))
     setBadge(null)
     const r = await api('POST', '/api/ext/text/propose', {
-      client_hint: clientHint(), guidelines: guidelineShas(), rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
+      client_hint: clientHint(), project: projectName(), guidelines: guidelineShas(), rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
       answers: S.rows.map((x) => ({ id: x.id, question: x.question, text: x.ta.value })),
     })
     S.busy = false
@@ -240,7 +246,7 @@
     S.edits = r.data.edits.map((e) => ({ ...e, state: 'open', final: e.replacement, said: [], valid: true }))
     S.seen.clear()
     renderPanel(); relayout(); setBadge(S.edits.length)
-    if (!S.edits.length && !S.error) setPanel(true)
+    if (!S.openedOnce || (!S.edits.length && !S.error)) { S.openedOnce = true; setPanel(true) }          // the panel opens by itself on the form page
   }
 
   function setBadge(n) { badgeN.textContent = n === null ? '…' : String(n); badgeN.classList.toggle('zero', n === 0) }
@@ -386,7 +392,8 @@
       el('div', { class: 'reason' }, e.reason || ''), ...e.said.map((s) => el('div', { class: 'said' }, 'You: ' + s)), note,
       el('div', { class: 'ctl' }, el('label', {}, 'Your own wording'), el('div', { class: 'row' }, own, copy)),
       el('div', { class: 'acts' }, accept, dismiss, status),
-      el('div', { class: 'ctl' }, el('label', {}, 'Comment for the AI'), comment, el('div', { class: 'row' }, ask)))
+      el('div', { class: 'ctl' }, el('label', {}, 'Comment for the AI'), comment, el('div', { class: 'row' }, ask)),
+      noteField(e))
     p.querySelector('.x').addEventListener('click', () => hideTip())
     p.addEventListener('mouseenter', () => { tipHover = true })
     p.addEventListener('mouseleave', () => { tipHover = false })
@@ -421,8 +428,8 @@
   async function reedit(e, text) {
     const row = rowOf(e.qid)
     const r = await api('POST', '/api/ext/text/propose', {
-      client_hint: clientHint(), guidelines: guidelineShas(), client_id: S.info && S.info.company ? S.info.company.client_id : null,
-      item_feedback: [{ id: e.id, original: e.original, replacement: e.replacement, comment: text }], rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
+      client_hint: clientHint(), project: projectName(), guidelines: guidelineShas(), client_id: S.info && S.info.company ? S.info.company.client_id : null,
+      item_feedback: [{ id: e.id, original: e.original, replacement: e.replacement, comment: text + (S.notes[noteKey(e)] ? ' | The editor’s own point of view: ' + S.notes[noteKey(e)] : '') }], rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
       answers: [{ id: row.id, question: row.question, text: row.ta.value }],
     })
     if (!r.ok) { if (tip) { const s = tip.querySelector('.ctl + .acts .small, .acts .small'); if (s) s.textContent = r.error } return }
@@ -478,18 +485,102 @@
     setTimeout(() => { flashId = null; relayout() }, 1400)
     setTimeout(() => { relayout(); const cur = S.edits.find((x) => x.id === e.id); if (cur && visible(cur)) { S.seen.add(cur.id); showCard(cur, false) } }, 120)
   }
+  // ------------------------------------------------------------------------------------------------ the person's own note under an edit
+  const noteKey = (e) => e.qid + '\u0001' + e.original + '\u0001' + e.replacement
+  const NOTES_KEY = () => 'msai_notes_' + location.host + '_' + (new URLSearchParams(location.search).get('JobID') || 'page')
+  async function loadNotes() {
+    try { const r = await chrome.storage.local.get(NOTES_KEY()); S.notes = r[NOTES_KEY()] || {} } catch (_) {
+      try { S.notes = JSON.parse(sessionStorage.getItem(NOTES_KEY()) || '{}') } catch (__) { S.notes = {} }
+    }
+  }
+  function persistNotes() {
+    try { chrome.storage.local.set({ [NOTES_KEY()]: S.notes }) } catch (_) { /* storage not available */ }
+    try { sessionStorage.setItem(NOTES_KEY(), JSON.stringify(S.notes)) } catch (_) { /* private window */ }
+  }
+  /** A text box under an edit where the editor writes their own point of view (why it is right / wrong, a problem they met). It is kept with the page's job
+      and sent to the platform's audit trail so the team can read it. */
+  function noteField(e) {
+    const ta = el('textarea', { placeholder: 'Your point of view: why this edit is right, wrong or needs another wording; a problem you met …', rows: '2' })
+    ta.value = S.notes[noteKey(e)] || ''
+    const st = el('div', { class: 'st' }, ta.value ? 'Your note is saved.' : '')
+    let last = ta.value
+    const save = async () => {
+      const text = ta.value.trim()
+      if (text === last.trim()) return
+      last = text
+      if (text) S.notes[noteKey(e)] = text; else delete S.notes[noteKey(e)]
+      persistNotes()
+      if (!text) { st.textContent = 'Note removed.'; return }
+      st.textContent = 'Saving …'
+      const r = await api('POST', '/api/ext/text/note', { client_hint: clientHint(), project: projectName(), job: new URLSearchParams(location.search).get('JobID') || '',
+        question: (rowOf(e.qid) || {}).question || '', original: e.original, replacement: e.applied ? e.final : e.replacement, decision: e.applied ? 'accepted' : e.state, text })
+      st.textContent = r.ok ? 'Saved. The team can read your note.' : 'Saved here only: ' + (r.error || 'the platform did not answer.')
+    }
+    ta.addEventListener('blur', save)
+    const wrap = el('div', { class: 'notefield' }, el('label', {}, 'Your note (cross-check / your point of view)'), ta, st)
+    wrap.addEventListener('click', (ev) => ev.stopPropagation())
+    wrap.addEventListener('mouseenter', () => { tipHover = true })
+    return wrap
+  }
+
+  // ------------------------------------------------------------------------------------------------ the Rules tab
+  async function addRules(text, scope, btn, st) {
+    if (text.trim().length < 4) { st.textContent = 'Write at least one rule.'; return }
+    btn.disabled = true; st.textContent = 'Adding …'
+    const r = await api('POST', '/api/ext/guidelines/manual', { client_hint: clientHint(), project: projectName(), text, scope })
+    btn.disabled = false
+    if (!r.ok) { st.textContent = r.error || 'The platform did not accept the rules.'; return }
+    const d = r.data
+    if (d.status === 'added' || d.status === 'known') {
+      S.note = { kind: 'ok', text: d.status === 'added' ? `${d.added} rule${d.added === 1 ? '' : 's'} added for ${d.scope === 'client' ? 'the whole client' : 'this project'}. They are used for editing now and count in QC after approval; the answers were checked again.` : 'Those rules were already added.' }
+      await check()
+    } else st.textContent = d.message || 'Not added.'
+  }
+  function rulesTab(i) {
+    const parts = [...guidelineCards()]
+    const box = el('textarea', { rows: '6', placeholder: 'One rule per line, for example:\nAlways write the brand as “Love’s Travel Stops”\nspelling: use “lemonade”, never “lemonaid”\nDo not mention alcohol; say “beverage”' })
+    const scope = el('select', {}, el('option', { value: 'project' }, 'This project only'), el('option', { value: 'client' }, 'Whole client'))
+    scope.style.cssText = 'font:inherit;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff'
+    const btn = el('button', { class: 'primary' }, 'Add rules')
+    const st = el('div', { class: 'small muted', style: 'margin-top:4px' })
+    btn.addEventListener('click', () => addRules(box.value, scope.value, btn, st))
+    const none = S.gl && (!S.gl.length || S.gl.every((g) => g.status !== 'learned' && g.status !== 'known'))
+    parts.push(card(none ? 'warn' : '', el('h3', {}, 'Add rules & regulations'),
+      el('div', { class: 'small', style: 'margin-bottom:6px' }, none ? 'The AI could not read guidelines for this page, so type the rules the editors must follow. ' : 'Something the guidelines do not say, or the AI missed? ',
+        'One rule per line; start a line with a type (spelling, past tense, punctuation, terminology …) if you want. They are used for editing at once and count in QC after approval.'),
+      box, el('div', { class: 'acts' }, scope, btn), st))
+    if (i) {
+      const mine = (i.rules || []).filter((r) => r.company_specific)
+      parts.push(el('div', { class: 'q' }, `Rules in use for this client (${mine.length}) · ${(i.rules || []).length - mine.length} general rules`))
+      if (!mine.length) parts.push(el('div', { class: 'small muted' }, 'This client has no rules of its own yet.'))
+      for (const r of mine) parts.push(el('div', { class: 'rulerow' }, el('span', { class: 'chip ' + (r.manual ? 'rules' : r.learned ? 'ai' : '') }, r.manual ? 'Typed' : r.learned ? 'From guidelines' : 'Checklist'),
+        el('span', { style: 'flex:1' }, r.name), el('span', { class: 'muted' }, r.status === 'draft' ? 'awaiting approval' : 'approved')))
+    }
+    return parts
+  }
+
   function renderPanel() {
     const i = S.info
     subtitle.textContent = S.session ? `${S.session.name || ''}` : ''
     const parts = []
+    const nOpen = S.edits.filter((e) => e.state === 'open').length
+    const tabBtn = (id, label) => { const b = el('button', { class: S.tab === id ? 'on' : '' }, label); b.addEventListener('click', () => { S.tab = id; hideTip(); renderPanel() }); return b }
+    const tabs = el('div', { class: 'tabs' }, tabBtn('edits', `Edits (${nOpen})`), tabBtn('rules', 'Rules & guidelines'))
     if (S.error) parts.push(card('err', el('b', {}, 'Could not check this page. '), S.error))
+    if (i && S.tab === 'rules') {
+      set(bodyEl, tabs, noteCard(), ...rulesTab(i))
+      return renderFoot()
+    }
     if (i) {
       parts.push(card(i.company ? 'info' : 'warn', el('h3', {}, i.company ? `Client: ${i.company.client}` : 'Client not recognised'),
         el('div', { class: 'small' }, i.company ? `Recognised from the page header. ${i.rules_used} grammar rule${i.rules_used === 1 ? '' : 's'} apply (${i.company_rules} of this client).`
           : `Only the general grammar rules were used (${i.rules_used}). The page header names no client that is set up in the platform.`),
         i.pending_rules ? el('div', { class: 'small', style: 'margin-top:4px' }, `${i.pending_rules} checklist rule${i.pending_rules === 1 ? ' is' : 's are'} still waiting for the Super Admin's approval; they are used for editing, not for QC.`) : null))
       if (i.message) parts.push(card('warn', i.message))
-      parts.push(...guidelineCards())
+      const gl = S.gl || []
+      const learned = gl.filter((g) => g.status === 'learned' || g.status === 'known')
+      if (!learned.length) parts.push(card('warn', el('div', { class: 'small' }, gl.length ? 'The AI could not learn this page’s guidelines. ' : 'No guideline file was found on this page. ', el('a', { href: '#', onclick: 'return false' }, 'Add the rules yourself →'))))
+      else parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `Following ${learned.reduce((n, g) => n + (g.rules || 0), 0)} rule${learned.length === 1 && learned[0].rules === 1 ? '' : 's'} learned from the client’s guidelines${i.manual_rules ? ` + ${i.manual_rules} typed by the team` : ''} (Rules tab).`))
       const open = S.edits.filter((e) => e.state !== 'dismissed')
       parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. Accept writes the fix into the box; nothing is saved on the website until you save.`))
       let last = null
@@ -499,13 +590,14 @@
         const s = el('div', { class: 'sug ' + groupOf(e) + (e.state === 'dismissed' ? ' off' : '') },
           el('div', {}, el('span', { class: 'cat chip ' + (e.source === 'ai' ? 'ai' : 'rules') }, e.source === 'ai' ? 'AI' : 'Rules'), el('b', {}, labelOf(e))),
           el('div', {}, el('span', { class: 'del' }, e.original), ' → ', el('span', { class: 'add' }, e.state === 'accepted' ? e.final : e.replacement)),
-          el('div', { class: 'small muted' }, (e.state === 'accepted' ? '✓ accepted · ' : e.state === 'dismissed' ? 'dismissed · ' : '') + (e.reason || '')))
+          el('div', { class: 'small muted' }, (e.state === 'accepted' ? '✓ accepted · ' : e.state === 'dismissed' ? 'dismissed · ' : '') + (e.reason || '')), noteField(e))
         s.addEventListener('click', () => focusEdit(e))
         parts.push(s)
       }
       if (!S.edits.length) parts.push(card('ok', el('b', {}, 'No edits needed.'), el('div', { class: 'small' }, 'Nothing to fix in the answers on this page.')))
     }
-    set(bodyEl, noteCard(), ...parts)
+    set(bodyEl, tabs, noteCard(), ...parts)
+    for (const a of bodyEl.querySelectorAll('a[href="#"]')) a.addEventListener('click', (ev) => { ev.preventDefault(); S.tab = 'rules'; renderPanel() })
     renderFoot()
   }
 
@@ -621,6 +713,7 @@
     if (!S.session) { document.body.append(host); return signIn() }
     document.body.append(host)
     setBadge(null)
+    await loadNotes()
     if (!S.gl) {
       set(bodyEl, card('', el('span', { class: 'spin' }), 'Looking for this client’s guidelines on the website …'))
       setPanel(true)

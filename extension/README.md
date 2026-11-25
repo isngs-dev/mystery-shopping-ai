@@ -79,6 +79,15 @@ names, forbidden terms, tense, punctuation, topics that must not appear ...; not
 the panel ("Learned N editing rules from ..."). The file's text is data for the AI, never instructions. Nothing is set up by hand; a client that is not in the
 platform is reported ("client not set up"), never created.
 
+### Rules & guidelines tab, and your own note under every edit
+The panel has two tabs. **Edits** lists the suggestions; **Rules & guidelines** shows what happened with the page's guideline file, the rules this client has
+(from the guidelines, typed by the team, from the checklist) and a text box **Add rules & regulations**: one rule per line, for this project or the whole client
+(start a line with a type such as `spelling:` or `past tense:`). It is meant for when the AI could not read the guidelines, or for something the file does not
+say. No AI is needed for it, so it works even when the model is down. Typed rules are drafts: used for editing at once, counted in QC after approval, and the
+answers are checked again straight away. Under every suggested edit (in the panel and on the pop-up card) there is a **note box** for the editor's own point of view
+(why the edit is right or wrong, a problem met while editing); notes are kept with the page's job and written to the platform's audit trail
+(`POST /api/ext/text/note`), and "Ask AI" takes the note into account. The panel opens by itself on a shop form page.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part
