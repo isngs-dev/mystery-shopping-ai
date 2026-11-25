@@ -221,7 +221,7 @@
         if (blob.size > 6_000_000) throw new Error('The guideline file is larger than 6 MB.')
         item.sha = hex(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))
         const body = { client_hint: clientHint(), project: projectName(), sha256: item.sha, filename: decodeURIComponent(g.url.split('?')[0].split('/').pop() || 'guidelines.pdf'), source_url: g.url }
-        let a = await api('POST', '/api/ext/guidelines/learn', body)
+        let a = await apiRetry('POST', '/api/ext/guidelines/learn', body)
         if (a.ok && a.data.status === 'need_content') {
           set(bodyEl, card('', el('span', { class: 'spin' }), 'New guideline file: the AI is reading it and writing the client’s editing rules … (one time only)'))
           a = await api('POST', '/api/ext/guidelines/learn', { ...body, content_b64: await toB64(blob) })
@@ -311,6 +311,19 @@
     set(footEl)
   }
 
+  /** A server that is restarting (a new version is being deployed) or waking up answers 502 / 503 / 504 or nothing: try again a few times before giving up. */
+  const TRANSIENT = new Set([0, 502, 503, 504])
+  async function apiRetry(method, path, body, onWait) {
+    const waits = [4000, 8000, 15000, 25000]
+    let r = await api(method, path, body)
+    for (let i = 0; i < waits.length && !r.ok && TRANSIENT.has(r.status); i++) {
+      if (onWait) onWait(i + 1, waits.length)
+      await new Promise((res) => setTimeout(res, waits[i]))
+      r = await api(method, path, body)
+    }
+    return r
+  }
+
   async function check(note) {
     if (S.busy) return
     S.busy = true
@@ -318,13 +331,16 @@
     for (const x of S.rows) if (!S.orig.has(x.id)) S.orig.set(x.id, x.ta.value)      // what the answer said when the page was opened (to count what was edited)
     set(bodyEl, card('', el('span', { class: 'spin' }), `Checking ${S.rows.length} answer${S.rows.length === 1 ? '' : 's'}…`))
     setBadge(null)
-    const r = await api('POST', '/api/ext/text/propose', {
+    const r = await apiRetry('POST', '/api/ext/text/propose', {
       client_hint: clientHint(), project: projectName(), guidelines: guidelineShas(), rejected: [...S.dismissed].map((k) => { const [o, n] = k.split('\u0001'); return { original: o, replacement: n } }),
       answers: S.rows.map((x) => ({ id: x.id, question: x.question, text: x.ta.value })),
-    })
+    }, (i, n) => set(bodyEl, card('warn', el('span', { class: 'spin' }), `The platform server is starting up or busy … trying again (${i}/${n}). This can take a minute.`)))
     S.busy = false
     if (r.status === 401) return signIn('Please sign in.')
-    if (!r.ok) { S.error = r.error; S.info = null; S.edits = []; renderPanel(); relayout(); setPanel(true); return }
+    if (!r.ok) {
+      S.error = TRANSIENT.has(r.status) ? `The platform server did not answer (${r.error}). It is probably restarting; wait a minute and press “Check again”.` : r.error
+      S.info = null; S.edits = []; renderPanel(); relayout(); setPanel(true); return
+    }
     S.error = null
     S.info = r.data
     S.checked = true

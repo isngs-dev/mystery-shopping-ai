@@ -123,6 +123,10 @@ Each text box shows a small round **M** badge in its bottom-left corner with the
 words that change (`a` -> `an`, `5pm,the` -> `5pm, the`), not the whole phrase. The right panel follows the page: the box in the middle of the screen is highlighted in the list and scrolled
 to the top. A word with a capital inside (`iSN`, `eBay`) is treated as a brand, not a typo, and a dash-spacing fix such as `Correct- See` is no longer refused as "a new proper word".
 
+### When the platform server is restarting
+Right after a new version is deployed (or when the host wakes the server up) the platform answers 502 / 503 / 504 for a minute. The extension now tries again by itself (after 4, 8, 15 and 25 seconds,
+saying so in the panel) before it shows an error; the error then says the server is probably restarting and to press **Check again**.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part
