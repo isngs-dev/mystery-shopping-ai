@@ -54,6 +54,42 @@ def _tokens(answers: list[dict]) -> list[Tok]:
     return toks
 
 
+def char_rules(toks: list[Tok], answers: list[dict], covered: set[int]) -> list[auto_editor.EditOp]:
+    """What the word-based corrector cannot see because it never looks at the white space between words: extra spaces, a comma glued to the next word
+    when the first one carries a digit ("5pm,the"), a space before a comma that is glued to the next word (" ,paid"), and a last sentence without its full stop.
+    `covered` = tokens an earlier rule already edits (never touched twice)."""
+    ops: list[auto_editor.EditOp] = []
+    by_page: dict[int, list[int]] = {}
+    for i, t in enumerate(toks):
+        by_page.setdefault(t.page, []).append(i)
+    plain = lambda s: not re.search(r"://|@|www\.|\.[a-z]{2,4}/", s, re.I)                              # noqa: E731 - never touch links and e-mail addresses
+    for page, idx in by_page.items():
+        text = answers[page - 1]["text"]
+        for a, b in zip(idx, idx[1:]):
+            ta, tb = toks[a], toks[b]
+            if a in covered or b in covered or not (plain(ta.text) and plain(tb.text)):
+                continue
+            gap = text[int(ta.box[2]):int(tb.box[0])]
+            if len(gap) > 1 and set(gap) == {" "}:
+                ops.append(auto_editor.EditOp(a, b + 1, f"{ta.text} {tb.text}", f"{ta.text}{gap}{tb.text}", "Extra space between words", "spacing", 0.97, "rules", page))
+                covered.update((a, b))
+            elif gap == " " and re.fullmatch(r"[,;:][A-Za-z].*", tb.text) and not re.search(r"[,;:.!?]$", ta.text):
+                ops.append(auto_editor.EditOp(a, b + 1, f"{ta.text}{tb.text[0]} {tb.text[1:]}", f"{ta.text} {tb.text}", "No space before a comma; a space after it", "spacing", 0.9, "rules", page))
+                covered.update((a, b))
+        for i in idx:
+            m = re.fullmatch(r"([A-Za-z0-9’'-]*[A-Za-z][A-Za-z0-9’'-]*),([A-Za-z][\w’'-]*[.!?]?)", toks[i].text)
+            if m and i not in covered and plain(toks[i].text):
+                ops.append(auto_editor.EditOp(i, i + 1, f"{m.group(1)}, {m.group(2)}", toks[i].text, "A space is needed after the comma", "spacing", 0.9, "rules", page))
+                covered.add(i)
+        body = text.rstrip()
+        last = idx[-1]
+        last_line = body.split("\n")[-1]
+        if last not in covered and re.search(r"[A-Za-z]$", body) and len(last_line.split()) >= 6 and plain(toks[last].text) \
+                and (len(body.split()) >= 12 or re.search(r"[.!?]", body[:-1])):                              # prose, not a name or an address
+            ops.append(auto_editor.EditOp(last, last + 1, toks[last].text + ".", toks[last].text, "The last sentence has no full stop", "punctuation", 0.6, "rules", page))
+    return ops
+
+
 def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = None, client_id: int | None = None,
                  feedback: str | None = None, rejected: list[dict] | None = None, item_feedback: list[dict] | None = None,
                  guidelines: list[str] | None = None, project: str | None = None) -> dict:
@@ -66,6 +102,8 @@ def propose_text(db: Session, *, answers: list[dict], client_hint: str | None = 
     toks = _tokens(answers)
     allowed: set[str] = set()
     rule_ops, rule_skipped = auto_editor.rule_based_edits(toks, allowed, set())
+    covered = {k for o in rule_ops for k in range(o.i1, o.i2)}
+    rule_ops = rule_ops + char_rules(toks, answers, covered)
     provider, ai_status, ai_msg = resolve_provider()
     ai_ops: list[auto_editor.EditOp] = []
     ai_skipped: list[dict] = []

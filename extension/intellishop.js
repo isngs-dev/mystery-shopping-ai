@@ -72,7 +72,7 @@
   .badge .n { position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: #e5484d; color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; border: 2px solid #fff; }
   .badge .n.zero { background: #15a37f; }
   .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147482000; }
-  .ul { position: fixed; pointer-events: none; border-bottom: 3px solid var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); border-radius: 2px 2px 0 0; }
+  .ul { position: fixed; pointer-events: none; border-bottom: 3px solid var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); border-radius: 2px 2px 0 0; }
   .ul.flash { background: color-mix(in srgb, var(--c) 30%, transparent); }
   .pop { position: fixed; z-index: 2147483002; width: 330px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px;
     box-shadow: 0 10px 30px rgba(15,23,42,.28); color: #1f2937; font: 13px/1.45 system-ui, 'Segoe UI', Arial, sans-serif; }
@@ -88,6 +88,8 @@
   .oktext { color: #067a55; font-size: 12px; min-height: 1em; }
   .filebtn { display: inline-block; margin: 0; font-weight: 600; font-size: 12px; border: 1px solid #d1d5db; border-radius: 999px; padding: 4px 12px; cursor: pointer; background: #fff; }
   .filebtn:hover { background: #f3f4f6; } .filebtn input { display: none; }
+  .more { display: none; } .more.open { display: block; }
+  .linkbtn { border: 0; background: transparent; color: #0f8a69; font-weight: 600; font-size: 12px; padding: 3px 6px; } .linkbtn:hover { background: #eef7f3; }
   .usednote { font-size: 12px; background: #fffbe6; border: 1px solid #f2e3a3; border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
   .rulerow { display: flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f2f5; }
   `
@@ -144,9 +146,32 @@
     const first = [...d.childNodes].find((n) => n.nodeType === 3 && n.data.trim())
     return ((first ? first.data : d.textContent.split('Spell Check')[0]) || '').replace(/\s+/g, ' ').trim()
   }
+  /** The label of a text box that is not a question's answer (for example "Editor's Notes:"): the nearest short text before it. */
+  function labelOf0(ta) {
+    let n = ta
+    for (let k = 0; k < 6 && n; k++) {
+      for (let s = n.previousSibling; s; s = s.previousSibling) {
+        const t = (s.textContent || '').replace(/\s+/g, ' ').trim()
+        if (t && t.length < 80) return t.replace(/:$/, '')
+      }
+      n = n.parentElement
+    }
+    return 'Notes'
+  }
+  /** Every free-text box of the page that can be edited: the answers (Q[…]) and the other notes boxes (Editor's Notes …), like Grammarly checks every box. */
   function answerBoxes() {
-    return [...document.querySelectorAll('textarea[name^="Q["]')].filter((t) => t.offsetParent !== null && !t.readOnly && !t.disabled && t.value.trim().split(/\s+/).length >= 2 &&
-      !SKIP_QUESTION.test(questionOf(t))).map((ta) => ({ id: (ta.name.match(/Q\[(\d+)\]/) || [])[1] || ta.name, ta, question: questionOf(ta) }))
+    const out = []
+    let n = 0
+    for (const t of document.querySelectorAll('textarea')) {
+      n++
+      if (t.closest('#msai-shop-host') || t.offsetParent === null || t.readOnly || t.disabled || t.value.trim().split(/\s+/).length < 2) continue
+      if (/search|e-?mail|subject|password|captcha/i.test(t.name || '')) continue
+      const q = /^Q\[/.test(t.name || '')
+      const question = q ? questionOf(t) : labelOf0(t)
+      if (SKIP_QUESTION.test(question)) continue
+      out.push({ id: q ? (t.name.match(/Q\[(\d+)\]/) || [])[1] || t.name : 'x' + n, ta: t, question })
+    }
+    return out
   }
   function clientHint() {
     const h = document.querySelector('.white16bold')
@@ -441,14 +466,19 @@
       ask.disabled = true; status.textContent = ''; status.append(el('span', { class: 'spin' }), 'The AI is re-editing…')
       await reedit(e, comment.value.trim())
     })
+    // Grammarly-style: the card shows the change and Accept / Dismiss; own wording, a comment for the AI and your note are one click away under "More"
+    const more = el('div', { class: 'more' },
+      el('div', { class: 'ctl' }, el('label', {}, 'Your own wording'), el('div', { class: 'row' }, own, copy)),
+      el('div', { class: 'ctl' }, el('label', {}, 'Comment for the AI'), comment, el('div', { class: 'row' }, ask)),
+      noteField(e))
+    const moreBtn = el('button', { class: 'linkbtn' }, 'More ▾')
+    moreBtn.addEventListener('click', () => { const open = more.classList.toggle('open'); moreBtn.textContent = open ? 'Less ▴' : 'More ▾'; placeCard(e) })
     const p = el('div', { class: 'pop' },
       el('div', { class: 'top' }, who, el('span', { class: 'cat' }, labelOf(e)), el('button', { class: 'x', title: 'Close' }, '✕')),
       el('div', { class: 'change' }, el('span', { class: 'del' }, e.original), ' → ', el('span', { class: 'add' }, e.replacement)),
       el('div', { class: 'reason' }, e.reason || ''), ...e.said.map((s) => el('div', { class: 'said' }, 'You: ' + s)), note,
-      el('div', { class: 'ctl' }, el('label', {}, 'Your own wording'), el('div', { class: 'row' }, own, copy)),
-      el('div', { class: 'acts' }, accept, dismiss, status),
-      el('div', { class: 'ctl' }, el('label', {}, 'Comment for the AI'), comment, el('div', { class: 'row' }, ask)),
-      noteField(e))
+      el('div', { class: 'acts' }, accept, dismiss, moreBtn, status),
+      more)
     p.querySelector('.x').addEventListener('click', () => hideTip())
     p.addEventListener('mouseenter', () => { tipHover = true })
     p.addEventListener('mouseleave', () => { tipHover = false })
@@ -780,7 +810,7 @@
       if (i.message) parts.push(card('warn', i.message))
       const gl = S.gl || []
       const learned = gl.filter((g) => g.status === 'learned' || g.status === 'known')
-      if (!learned.length) parts.push(card('warn', el('div', { class: 'small' }, gl.length ? 'The AI could not learn this page’s guidelines. ' : 'No guideline file was found on this page. ', el('a', { href: '#', onclick: 'return false' }, 'Add the rules yourself →'))))
+      if (!learned.length) parts.push(card('warn', el('div', { class: 'small' }, gl.length ? `The AI could not learn this page’s guidelines${(gl.find((g) => g.message) || {}).message ? ' (' + gl.find((g) => g.message).message + ')' : ''}. ` : 'No guideline file was found on this page. ', el('a', { href: '#', onclick: 'return false' }, 'Add the rules yourself →'))))
       else parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `Following ${learned.reduce((n, g) => n + (g.rules || 0), 0)} rule${learned.length === 1 && learned[0].rules === 1 ? '' : 's'} learned from the client’s guidelines${i.manual_rules ? ` + ${i.manual_rules} typed by the team` : ''} (Rules tab).`))
       const open = S.edits.filter((e) => e.state !== 'dismissed')
       parts.push(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, `${S.rows.length} answers checked · ${open.length} edit${open.length === 1 ? '' : 's'} · ${i.engine === 'ai+rules' ? 'AI + rules' : 'rules only'}. Accept writes the fix into the box; nothing is saved on the website until you save.`))

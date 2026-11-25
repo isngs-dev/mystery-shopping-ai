@@ -147,21 +147,32 @@ def note(db: Session, user: User, *, client_hint: str | None, project: str | Non
 
 def _ai_rules(provider, client: str, project: str | None, text: str, cap: int) -> list[dict]:
     """The AI reads the text in pieces (long checklists) and returns the merged, de-duplicated rule list. The first piece must work; later failures keep what was found."""
+    from concurrent.futures import ThreadPoolExecutor
+
     pieces = [text[i:i + CHUNK] for i in range(0, min(len(text), CHUNK * MAX_CHUNKS), CHUNK)]
     out: list[dict] = []
     seen: set[str] = set()
-    for n, piece in enumerate(pieces):
-        prompt = f"<client_brief client=\"{client}\" project=\"{project or ''}\" part=\"{n + 1}/{len(pieces)}\">\n{_TAGS.sub('< ', piece)}\n</client_brief>\nReturn the JSON."
-        try:
-            res = provider.analyze(LEARN_SYSTEM, prompt)
-            m = re.search(r"\{.*\}", res.text, re.S)
-            items = json.loads(m.group(0))["rules"] if m else None
-            if not isinstance(items, list):
-                raise ValueError("no rule list")
-        except Exception:  # noqa: BLE001
-            if n == 0:
-                raise
-            break
+
+    def read(n: int):
+        prompt = f"<client_brief client=\"{client}\" project=\"{project or ''}\" part=\"{n + 1}/{len(pieces)}\">\n{_TAGS.sub('< ', pieces[n])}\n</client_brief>\nReturn the JSON."
+        res = provider.analyze(LEARN_SYSTEM, prompt)
+        m = re.search(r"\{.*\}", res.text, re.S)
+        items = json.loads(m.group(0))["rules"] if m else None
+        if not isinstance(items, list):
+            raise ValueError("no rule list")
+        return items
+
+    with ThreadPoolExecutor(max_workers=min(4, len(pieces))) as pool:       # the pieces are read at the same time: a long checklist takes about as long as a short one
+        futures = [pool.submit(read, n) for n in range(len(pieces))]
+        results = []
+        for n, fut in enumerate(futures):
+            try:
+                results.append(fut.result())
+            except Exception:  # noqa: BLE001
+                if n == 0:
+                    raise
+                results.append([])
+    for items in results:
         for it in items:
             if not isinstance(it, dict):
                 continue

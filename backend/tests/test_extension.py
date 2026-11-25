@@ -434,6 +434,26 @@ def test_a_drive_folder_of_checklists_is_imported_per_client_and_basic_documents
         set_provider_override(None)
 
 
+def test_spacing_and_full_stop_rules_see_the_white_space_the_word_corrector_cannot(api, ctx):
+    call = _auth(_token("qc"))
+    a1 = "The cashier  greeted me warmly at the door and  said hello."        # two double spaces
+    a2 = "I paid at 5pm,the manager was present and she wrote my name down ,thanks for visiting. Then I left the store with my coffee"   # glued comma, " ,thanks", no final full stop
+    a3 = "Boca Raton (5836), Florida Atlantic University in Florida"        # an address: no full stop is asked for
+    a4 = "N/A"
+    out = call("POST", "/api/ext/text/propose", json={"client_hint": "Acme Retail: Store 978", "answers": [
+        {"id": "1", "question": "q1", "text": a1}, {"id": "2", "question": "q2", "text": a2}, {"id": "3", "question": "q3", "text": a3}, {"id": "4", "question": "q4", "text": a4}]}).json()
+    by = {(e["qid"], e["reason"]): e for e in out["edits"]}
+    spaces = [e for e in out["edits"] if e["qid"] == "1" and e["category"] == "spacing"]
+    assert len(spaces) == 2 and all(a1[e["start"]:e["end"]] == e["original"] and "  " in e["original"] and "  " not in e["replacement"] for e in spaces)
+    glued = by[("2", "A space is needed after the comma")]
+    assert glued["original"] == "5pm,the" and glued["replacement"] == "5pm, the" and a2[glued["start"]:glued["end"]] == "5pm,the"
+    before = by[("2", "No space before a comma; a space after it")]
+    assert before["original"] == "down ,thanks" and before["replacement"] == "down, thanks"
+    stop = by[("2", "The last sentence has no full stop")]
+    assert stop["original"] == "coffee" and stop["replacement"] == "coffee." and a2[stop["start"]:stop["end"]] == "coffee"
+    assert not [e for e in out["edits"] if e["qid"] in ("3", "4")]                                                       # an address and "N/A" are left alone
+
+
 def test_rules_typed_in_the_rules_tab_apply_to_their_project_and_a_human_note_is_kept(api, ctx):
     prov = RoutingProvider()
     set_provider_override(prov)

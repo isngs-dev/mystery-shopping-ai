@@ -112,6 +112,12 @@ file name: `CXE_Checklist` -> CXE, `Alta 360_Checklist` -> Alta 360; an unknown 
 client). Or paste another folder's link / name and choose the mode. Google Docs are read as Word files; PDF, Word, Excel and text files are supported; a file already read costs nothing.
 It runs in the background (`POST /api/ext/guidelines/drive`, `GET /api/ext/guidelines/drive/{job}`); the card shows each file's result.
 
+### Grammarly-style editing
+Every free-text box of the page is checked (the answers *and* other notes boxes such as "Editor's Notes"). Edits are underlined in the box; hover an underline and a compact card
+shows the change with **Accept** / **Dismiss** (Accept writes the fix into the box at once; *More* opens your own wording, a comment for the AI and your note). The right panel lists
+every change. Besides spelling, grammar, punctuation and the client's rules, the built-in corrector now sees white space: **extra spaces between words**, a comma glued to the next word
+(`5pm,the`), a space before such a comma, and a last sentence without its full stop. If the AI could not learn a page's guidelines, the panel shows the reason.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part
