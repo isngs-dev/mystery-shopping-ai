@@ -105,6 +105,13 @@ file's name when it names one; create the client when its name is new (Managers)
 them (Rules page, bulk approval). The tab lists the files of the client with **Remove** (its rules stop being used; the uploader or a Manager). Same file twice = added once.
 **Accept all N edits** writes every open suggestion into the answer boxes in one go (each can still be undone); then **Save to site & download PDF**.
 
+### Import a whole Google Drive folder (Managers)
+In the Rules tab, **Import from Google Drive** reads a Drive folder with the platform's own Drive access (the same service account as the Drive sync; the folder must be shared
+with it, which it is when it sits inside the synced folder). Two quick buttons: the **Checklist** folder (every file is a client's checklist; the client is read from the
+file name: `CXE_Checklist` -> CXE, `Alta 360_Checklist` -> Alta 360; an unknown client is created) and **Basic MS Documentation** (general guidance for every client: its rules carry no
+client). Or paste another folder's link / name and choose the mode. Google Docs are read as Word files; PDF, Word, Excel and text files are supported; a file already read costs nothing.
+It runs in the background (`POST /api/ext/guidelines/drive`, `GET /api/ext/guidelines/drive/{job}`); the card shows each file's result.
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part

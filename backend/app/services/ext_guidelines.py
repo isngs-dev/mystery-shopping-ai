@@ -179,9 +179,26 @@ def _rule_config(sha: str, scope: str, project: str | None) -> dict:
     return {"guideline": sha[:16], "manual": True, "upload": True, "projects": [project] if (scope == "project" and project) else []}
 
 
+GENERAL_NAME = "General (all clients)"
+
+
+def general_client(db: Session) -> Client:
+    """A hidden placeholder client that owns the guideline files meant for EVERY client (basic documentation, writing standards). Its rules carry no client at all."""
+    c = db.execute(select(Client).where(Client.name == GENERAL_NAME)).scalar_one_or_none()
+    if c is None:
+        c = Client(name=GENERAL_NAME, folder="_General_all_clients", is_active=False)
+        db.add(c)
+        db.flush()
+    return c
+
+
 def learn(db: Session, user: User, *, client_hint: str | None, project: str | None, sha256: str, filename: str | None, source_url: str | None,
-          content: bytes | None, client_id: int | None = None, scope: str = "page") -> dict:
-    company = match_client(db, client_hint, client_id)
+          content: bytes | None, client_id: int | None = None, scope: str = "page", general: bool = False) -> dict:
+    if general:
+        gc = general_client(db)
+        company, scope = {"client": GENERAL_NAME, "client_id": gc.id}, "client"
+    else:
+        company = match_client(db, client_hint, client_id)
     if not company:
         return {"status": "no_client", "message": "The page names no client that is set up in the platform, so its guidelines were not learned."}
     cid = company["client_id"]
@@ -235,7 +252,7 @@ def learn(db: Session, user: User, *, client_hint: str | None, project: str | No
         if db.execute(select(QCRule).where(QCRule.rule_key == key)).scalar_one_or_none():
             continue
         rv = rules_service.create_rule(
-            db, user, rule_key=key, name=name, description=desc, category=tx.category_of(sub).key, error_subtype=sub, severity="minor", client_id=cid,
+            db, user, rule_key=key, name=name, description=desc, category=tx.category_of(sub).key, error_subtype=sub, severity="minor", client_id=None if general else cid,
             project_id=None, form_type=None, check_type="ai_guideline", config=_rule_config(sha, scope, project),
             examples=_clip(it.get("examples"), 400) or None, effective_date=date.today(),
             change_note=f"Learned by the AI from {'an uploaded' if scope != 'page' else 'the client’s'} guideline file ({_clip(filename, 120) or 'file'}): used for editing now, counted in QC after approval.")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from ..deps import get_current_user, needs
 from ..models import Form, User
 from ..permissions import get_form_or_404, has_perm
 from ..security import create_token
-from ..services import ext_assist, ext_guidelines, ext_review, ext_text, password_reset
+from ..services import ext_assist, ext_drive_import, ext_guidelines, ext_review, ext_text, password_reset
 from ..services.ai import resolve_provider
 from . import auth as auth_router
 
@@ -174,6 +174,25 @@ def upload_guidelines(body: UploadIn, user: User = Depends(needs("docs.ai_edit")
         raise HTTPException(413, "The file is larger than 6 MB.")
     return ext_guidelines.upload(db, user, client_name=body.client_name, client_id=body.client_id, filename=body.filename, content=content, scope=body.scope,
                                  project=body.project, create=body.create, auto=body.auto, can_create=has_perm(user, "ext.rules"))
+
+
+class DriveImportIn(BaseModel):
+    folder: str = Field(min_length=1, max_length=400)                      # a Drive folder link, its ID, or just its name
+    mode: str = Field(default="client", pattern="^(client|general)$")
+
+
+@router.post("/guidelines/drive")
+def drive_import_start(body: DriveImportIn, background: BackgroundTasks, user: User = Depends(needs("ext.rules")), db: Session = Depends(get_db)):
+    """Manager: import the guideline / checklist files of a Google Drive folder (read with the platform's Drive access) into editing rules, in the background."""
+    return ext_drive_import.start(db, user, body.folder, body.mode, background)
+
+
+@router.get("/guidelines/drive/{job}")
+def drive_import_status(job: str, user: User = Depends(needs("ext.rules"))):
+    out = ext_drive_import.status(job)
+    if out is None:
+        raise HTTPException(404, "That import is not known (the server may have restarted). Start it again: files already read are skipped.")
+    return out
 
 
 @router.get("/guidelines/files")

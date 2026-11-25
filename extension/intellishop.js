@@ -660,6 +660,57 @@
       el('div', { class: 'acts' }, el('label', { class: 'filebtn' }, 'Choose files', pick), el('label', { class: 'filebtn' }, 'Choose a folder', folder)),
       status, el('div', { class: 'acts' }, go), log)
   }
+  // ---- Managers: import a whole Google Drive folder (the platform reads it with its own Drive access, in the background)
+  let driveTimer = null
+  async function pollDrive() {
+    clearTimeout(driveTimer)
+    if (!S.drive || !S.drive.job || S.drive.state !== 'running') return
+    const r = await api('GET', '/api/ext/guidelines/drive/' + S.drive.job)
+    if (r.ok) Object.assign(S.drive, r.data); else { S.drive.state = 'failed'; S.drive.message = r.error }
+    if (S.paintDrive) S.paintDrive()
+    if (S.drive.state === 'running') { driveTimer = setTimeout(pollDrive, 3000); return }
+    const n = (S.drive.files || []).filter((f) => f.status === 'learned' || f.status === 'known').length
+    S.note = S.drive.state === 'done' ? { kind: 'ok', text: `Drive import finished: ${n} of ${(S.drive.files || []).length} files added. Their rules are used for editing now and count in QC after approval.` }
+      : { kind: 'err', text: 'Drive import failed: ' + (S.drive.message || 'unknown error') }
+    await check()
+  }
+  function driveCard() {
+    const folder = el('input', { type: 'text', placeholder: 'Another folder: its link or name', autocomplete: 'off' })
+    const mode = el('select', {}, el('option', { value: 'client' }, 'Client checklists (client from each file name)'), el('option', { value: 'general' }, 'General guidelines (for every client)'))
+    mode.style.cssText = 'font:inherit;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff;width:100%'
+    const out = el('div', { class: 'small', style: 'margin-top:6px' })
+    const btns = []
+    const paint = () => {
+      const d = S.drive
+      for (const b of btns) b.disabled = !!(d && d.state === 'running')
+      if (!d) { out.replaceChildren(); return }
+      const files = d.files || []
+      const head = d.state === 'running' ? el('div', {}, el('span', { class: 'spin' }), `Reading “${d.folder}” … ${files.length} of ${d.total || '?'} files`)
+        : d.state === 'done' ? el('div', {}, el('b', {}, `Finished “${d.folder}”: ${files.length} files, ${files.reduce((n, f) => n + (f.rules || 0), 0)} rules.`))
+        : el('div', { class: 'errtext' }, d.message || d.error || 'The import did not start.')
+      out.replaceChildren(head, ...files.map((f) => el('div', { class: 'rulerow' }, el('span', { class: 'chip ' + (f.status === 'learned' || f.status === 'known' ? 'rules' : '') }, f.status === 'reading' ? '…' : f.status === 'learned' || f.status === 'known' ? '✓' : '✗'),
+        el('span', { style: 'flex:1' }, f.name), el('span', { class: 'muted' }, f.status === 'learned' ? `${f.rules} rules → ${f.client}${f.created_client ? ' (new client)' : ''}` : f.status === 'known' ? `already added → ${f.client || ''}` : f.status === 'reading' ? '' : (f.message || f.status)))))
+    }
+    S.paintDrive = paint
+    const run = async (name, md) => {
+      S.drive = { state: 'running', folder: name, files: [] }; paint()
+      const r = await api('POST', '/api/ext/guidelines/drive', { folder: name, mode: md })
+      if (!r.ok || r.data.status !== 'started') { S.drive = { state: 'failed', message: (r.ok ? r.data.message : r.error) || 'Could not start the import.' }; paint(); return }
+      S.drive.job = r.data.job
+      pollDrive()
+    }
+    const quick = (label, name, md) => { const b = el('button', {}, label); b.addEventListener('click', () => run(name, md)); btns.push(b); return b }
+    const other = el('button', { class: 'primary' }, 'Import'); btns.push(other)
+    other.addEventListener('click', () => { if (folder.value.trim().length < 2) { out.textContent = 'Type the folder link or name.'; return } run(folder.value.trim(), mode.value) })
+    const c = card('', el('h3', {}, 'Import from Google Drive'),
+      el('div', { class: 'small', style: 'margin-bottom:6px' }, 'Managers: read a whole Drive folder at once. The platform opens it with its own Drive access (the folder must be shared with it), reads every file and turns it into rules. It runs in the background, so you can keep working.'),
+      el('div', { class: 'acts' }, quick('“Checklist” folder', 'Checklist', 'client'), quick('“Basic MS Documentation”', 'Basic MS Documentation', 'general')),
+      folder, el('div', { style: 'height:6px' }), mode, el('div', { class: 'acts' }, other), out)
+    c.style.display = 'none'
+    paint()
+    ;(async () => { const r = await api('GET', '/api/ext/clients'); if (r.ok && r.data.can_create) c.style.display = '' })()
+    return c
+  }
   /** The files this client's rules came from, with a Remove button (the rules of a removed file stop being used). */
   function filesCard(i) {
     const c = clientNow()
@@ -687,7 +738,7 @@
   }
 
   function rulesTab(i) {
-    const parts = [uploadCard(i), filesCard(i), ...guidelineCards()].filter(Boolean)
+    const parts = [driveCard(), uploadCard(i), filesCard(i), ...guidelineCards()].filter(Boolean)
     const box = el('textarea', { rows: '6', placeholder: 'One rule per line, for example:\nAlways write the brand as “Love’s Travel Stops”\nspelling: use “lemonade”, never “lemonaid”\nDo not mention alcohol; say “beverage”' })
     const scope = el('select', {}, el('option', { value: 'project' }, 'This project only'), el('option', { value: 'client' }, 'Whole client'))
     scope.style.cssText = 'font:inherit;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff'

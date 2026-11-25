@@ -364,6 +364,76 @@ def test_uploaded_guideline_files_become_rules_for_every_form_of_the_client_and_
         set_provider_override(None)
 
 
+class FakeDrive:
+    """A tiny Drive: <root>/Checklist/{CXE_Checklist, Alta 360_Checklist, picture.png}, <root>/Basic MS Documentation/Writing for Professionalism.pdf."""
+
+    def __init__(self, tree):
+        self.tree = tree
+
+    def root(self):
+        from app.services.drive_sources import Node
+        return Node("root", "Mystery Shopping_QC", True)
+
+    def children(self, node):
+        return self.tree.get(node.id, [])
+
+    def read(self, node):
+        return self.tree["bytes"][node.id]
+
+    def close(self):
+        pass
+
+
+def test_a_drive_folder_of_checklists_is_imported_per_client_and_basic_documents_apply_to_all(api, ctx, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import ext_drive_import
+    from app.services.drive_sources import Node
+
+    GDOC = "application/vnd.google-apps.document"
+    body = _docx("\n".join(f"Rule {i}: write the brand in full and never mention alcohol in any report you edit for this client." for i in range(1, 8)))
+    tree = {"root": [Node("f_check", "Checklist", True), Node("f_basic", "Basic MS Documentation", True)],
+            "f_check": [Node("d1", "CXE_Checklist", False, 100, GDOC), Node("d2", "Alta 360_Checklist", False, 100, GDOC), Node("p1", "picture.png", False, 5, "image/png")],
+            "f_basic": [Node("b1", "Writing for Professionalism.pdf", False, 100, "application/pdf")],
+            "bytes": {"d1": body + b"1", "d2": body + b"2", "b1": _docx("Always write in a professional tone, in the past tense, and never use slang in any report text.\n" * 6)}}
+    monkeypatch.setattr(ext_drive_import, "_open_drive", lambda fid: FakeDrive(tree))
+    monkeypatch.setattr(ext_drive_import, "get_settings", lambda: SimpleNamespace(google_drive_folder_id="ROOT"))
+    set_provider_override(LearnProvider())
+    try:
+        boss, editor = _auth(_token("manager")), _auth(_token("qc"))
+        assert editor("POST", "/api/ext/guidelines/drive", json={"folder": "Checklist"}).status_code == 403            # Managers only
+
+        start = boss("POST", "/api/ext/guidelines/drive", json={"folder": "checklist", "mode": "client"}).json()
+        assert start["status"] == "started"
+        job = boss("GET", f"/api/ext/guidelines/drive/{start['job']}").json()
+        assert job["state"] == "done" and job["total"] == 2 and job["folder"] == "Checklist"                          # the picture is not a document
+        by = {f["name"]: f for f in job["files"]}
+        assert by["CXE_Checklist"]["status"] == "learned" and by["CXE_Checklist"]["client"] == "CXE" and by["CXE_Checklist"]["created_client"] is True
+        assert by["Alta 360_Checklist"]["client"] == "Alta 360" and by["Alta 360_Checklist"]["rules"] == 2
+        names = {c["name"] for c in boss("GET", "/api/ext/clients").json()["clients"]}
+        assert {"CXE", "Alta 360"} <= names
+
+        form = {"client_hint": "CXE: Master Form | cxeview.com", "answers": [{"id": "1", "question": "Comments", "text": "The cashier greet me warmly."}]}
+        assert boss("POST", "/api/ext/text/propose", json=form).json()["manual_rules"] == 2                            # a CXE form follows CXE's file
+
+        gen = boss("POST", "/api/ext/guidelines/drive", json={"folder": "Basic MS Documentation", "mode": "general"}).json()
+        job2 = boss("GET", f"/api/ext/guidelines/drive/{gen['job']}").json()
+        assert job2["state"] == "done" and job2["files"][0]["status"] == "learned" and job2["files"][0]["rules"] == 2
+        assert "General (all clients)" not in {c["name"] for c in boss("GET", "/api/ext/clients").json()["clients"]}        # the placeholder owner stays hidden
+        for hint in ("CXE: Master Form", "Acme Retail: Store 978", "Alta 360: Form"):                                  # general rules reach every client
+            assert boss("POST", "/api/ext/text/propose", json={**form, "client_hint": hint}).json()["manual_rules"] >= 2
+        assert boss("POST", "/api/ext/text/propose", json={**form, "client_hint": "Unknown Brand"}).json()["manual_rules"] == 2   # even a page of no known client
+
+        again = boss("POST", "/api/ext/guidelines/drive", json={"folder": "Checklist"}).json()
+        assert {f["status"] for f in boss("GET", f"/api/ext/guidelines/drive/{again['job']}").json()["files"]} == {"known"}   # the same files cost nothing
+        missing = boss("POST", "/api/ext/guidelines/drive", json={"folder": "No Such Folder"}).json()
+        failed = boss("GET", f"/api/ext/guidelines/drive/{missing['job']}").json()
+        assert failed["state"] == "failed" and "No folder named" in failed["message"]
+        assert boss("GET", "/api/ext/guidelines/drive/nope").status_code == 404
+    finally:
+        set_provider_override(None)
+
+
 def test_rules_typed_in_the_rules_tab_apply_to_their_project_and_a_human_note_is_kept(api, ctx):
     prov = RoutingProvider()
     set_provider_override(prov)
