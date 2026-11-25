@@ -70,8 +70,10 @@ def char_rules(toks: list[Tok], answers: list[dict], covered: set[int]) -> list[
             if a in covered or b in covered or not (plain(ta.text) and plain(tb.text)):
                 continue
             gap = text[int(ta.box[2]):int(tb.box[0])]
-            if len(gap) > 1 and set(gap) == {" "}:
-                ops.append(auto_editor.EditOp(a, b + 1, f"{ta.text} {tb.text}", f"{ta.text}{gap}{tb.text}", "Extra space between words", "spacing", 0.97, "rules", page))
+            if gap != " " and "\n" not in gap and "\r" not in gap and gap.strip() == "":
+                # more than one space, or a space that is not a plain one (a non-breaking space or a tab copied from Word / a PDF looks like a space but is not)
+                why = "Extra space between words" if len(gap) > 1 else "A special space character instead of a normal space"
+                ops.append(auto_editor.EditOp(a, b + 1, f"{ta.text} {tb.text}", f"{ta.text}{gap}{tb.text}", why, "spacing", 0.97, "rules", page))
                 covered.update((a, b))
             elif gap == " " and re.fullmatch(r"[,;:][A-Za-z].*", tb.text) and not re.search(r"[,;:.!?]$", ta.text):
                 ops.append(auto_editor.EditOp(a, b + 1, f"{ta.text}{tb.text[0]} {tb.text[1:]}", f"{ta.text} {tb.text}", "No space before a comma; a space after it", "spacing", 0.9, "rules", page))

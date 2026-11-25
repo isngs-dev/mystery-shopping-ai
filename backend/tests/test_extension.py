@@ -453,6 +453,14 @@ def test_spacing_and_full_stop_rules_see_the_white_space_the_word_corrector_cann
     assert stop["original"] == "coffee" and stop["replacement"] == "coffee." and a2[stop["start"]:stop["end"]] == "coffee"
     assert not [e for e in out["edits"] if e["qid"] in ("3", "4")]                                                       # an address and "N/A" are left alone
 
+    # spaces that are not plain spaces (copied from Word / a PDF): they look like spaces, Grammarly flags them, so must the extension
+    odd = "I put my own contraband paper    back into my shoe and the TCA\tsaid goodbye to me in the green　blouse today."
+    got = call("POST", "/api/ext/text/propose", json={"client_hint": "Acme Retail: Store 978", "answers": [{"id": "9", "question": "q", "text": odd}]}).json()
+    sp = [e for e in got["edits"] if e["category"] == "spacing"]
+    assert [e["replacement"] for e in sp] == ["paper back", "TCA said", "green blouse"]
+    assert all(odd[e["start"]:e["end"]] == e["original"] and e["original"] != e["replacement"] for e in sp)
+    assert sp[0]["reason"] == "Extra space between words" and sp[1]["reason"].startswith("A special space")
+
 
 def test_an_edit_marks_only_the_words_that_change_and_a_brand_spelling_is_left_alone(api, ctx):
     class Wide(RoutingProvider):
