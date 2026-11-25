@@ -14,7 +14,7 @@ from ..deps import get_current_user, needs
 from ..models import Form, User
 from ..permissions import get_form_or_404, has_perm
 from ..security import create_token
-from ..services import ext_assist, ext_drive_import, ext_guidelines, ext_review, ext_text, password_reset
+from ..services import ext_assist, ext_drive_import, ext_guidelines, ext_images, ext_review, ext_text, password_reset
 from ..services.ai import resolve_provider
 from . import auth as auth_router
 
@@ -139,6 +139,27 @@ def learn_guidelines(body: GuidelineIn, user: User = Depends(needs("docs.ai_edit
             raise HTTPException(413, "The guideline file is too large.")
     return ext_guidelines.learn(db, user, client_hint=body.client_hint, project=body.project, sha256=body.sha256, filename=body.filename,
                                 source_url=body.source_url, content=content)
+
+
+class ImageCheckIn(BaseModel):
+    client_hint: str | None = Field(default=None, max_length=300)
+    project: str | None = Field(default=None, max_length=200)
+    question: str | None = Field(default=None, max_length=600)
+    image_b64: str = Field(max_length=9_000_000)
+    guidelines: list[str] = Field(default_factory=list, max_length=6)
+
+
+@router.post("/images/check")
+def check_image(body: ImageCheckIn, user: User = Depends(needs("docs.ai_edit")), db: Session = Depends(get_db)):
+    """A picture of the shop review page: what the file says about itself, and what the AI sees (does it match the question and the client's picture requirements,
+    visible signs of an AI-generated image). Nothing is stored."""
+    try:
+        content = base64.b64decode(body.image_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "The picture is not valid base64.")
+    if len(content) > 6_500_000:
+        raise HTTPException(413, "The picture is larger than 6 MB.")
+    return ext_images.check_image(db, user, client_hint=body.client_hint, project=body.project, question=body.question, content=content, guidelines=body.guidelines)
 
 
 class UploadIn(BaseModel):

@@ -434,6 +434,89 @@ def test_a_drive_folder_of_checklists_is_imported_per_client_and_basic_documents
         set_provider_override(None)
 
 
+class PhotoProvider(LearnProvider):
+    """Also reads the picture requirements of a guideline file and looks at pictures."""
+
+    def __init__(self, verdict="ok", risk="low"):
+        super().__init__()
+        self.verdict, self.risk, self.seen = verdict, risk, []
+
+    def analyze(self, system, user):
+        if "guideline document into rules" in system:
+            self.prompts.append((system, user))
+            return AIResult(text=json.dumps({"rules": [], "photo_requirements": ["Every signage photo must show the whole sign, in focus.", "No customer or staff face may be clearly visible."]}), model="fake-1")
+        return super().analyze(system, user)
+
+    def analyze_image(self, system, user, image, media_type="image/jpeg"):
+        self.seen.append((user, len(image), media_type))
+        return AIResult(text=json.dumps({"shows": "A black sign on a stand in a hallway.", "matches_question": "yes", "match_note": "It is signage.",
+                                         "requirements": [{"rule": "Every signage photo must show the whole sign, in focus.", "met": "yes", "note": "Whole sign visible"},
+                                                          {"rule": "No customer or staff face may be clearly visible.", "met": "yes", "note": "No faces"}],
+                                         "quality": ["slightly dark"], "ai_generated": {"risk": self.risk, "signs": ["clean lighting"]}, "verdict": self.verdict, "summary": "Looks like genuine signage."}), model="fake-1")
+
+
+def _picture(kind="jpeg", exif=True):
+    import io
+
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+
+    img = Image.new("RGB", (640, 480), (90, 110, 130))
+    buf = io.BytesIO()
+    if kind == "png":
+        info = PngInfo()
+        info.add_text("parameters", "a photo of a sign, Steps: 20, Sampler: Euler a, CFG scale: 7")
+        img.save(buf, "PNG", pnginfo=info)
+    else:
+        ex = Image.Exif()
+        if exif:
+            ex[271], ex[272], ex[306] = "Apple", "iPhone 15", "2026:11:23 10:15:00"
+        img.save(buf, "JPEG", exif=ex.tobytes() if exif else b"")
+    return buf.getvalue()
+
+
+def test_pictures_are_checked_against_the_question_and_the_clients_picture_requirements(api, ctx):
+    import base64
+
+    prov = PhotoProvider()
+    set_provider_override(prov)
+    try:
+        b64 = lambda raw: base64.b64encode(raw).decode()                                                       # noqa: E731
+        boss, editor = _auth(_token("manager")), _auth(_token("qc"))
+        brief = _docx("\n".join(f"Rule {i}: every signage photo must show the whole sign and the photo must be in focus, with no faces." for i in range(1, 8)))
+        up = boss("POST", "/api/ext/guidelines/upload", json={"client_name": "Acme Retail", "filename": "photo rules.docx", "content_b64": b64(brief)}).json()
+        assert up["status"] == "learned" and up["photo_rules"] == 2                                          # the picture requirements were found in the file
+
+        body = {"client_hint": "Acme Retail: Store 978", "question": "9.2. Please provide pictures for signage.", "image_b64": b64(_picture())}
+        got = editor("POST", "/api/ext/images/check", json=body).json()
+        assert got["status"] == "ok" and got["verdict"] == "ok" and got["matches_question"] == "yes" and got["requirements_given"] == 2
+        assert got["metadata"]["camera"] == "Apple iPhone 15" and got["metadata"]["taken"] and got["metadata"]["ai_marker"] is None
+        assert [r["met"] for r in got["requirements"]] == ["yes", "yes"] and got["ai_generated"]["risk"] == "low" and "never proof" in got["ai_generated"]["note"]
+        user_prompt, size, mime = prov.seen[-1]
+        assert "Please provide pictures for signage" in user_prompt and "whole sign, in focus" in user_prompt and mime == "image/jpeg"   # the model gets the question and the rules
+
+        stripped = editor("POST", "/api/ext/images/check", json={**body, "image_b64": b64(_picture(exif=False))}).json()
+        assert stripped["metadata"]["camera"] is None and any("no camera information" in n.lower() for n in stripped["metadata"]["notes"])
+
+        gen = editor("POST", "/api/ext/images/check", json={**body, "image_b64": b64(_picture("png"))}).json()               # an image generator left its prompt in the file
+        assert gen["ai_generated"]["risk"] == "high" and gen["verdict"] == "review" and gen["ai_generated"]["signs"][0].startswith("File:")
+        assert "parameters" in gen["metadata"]["ai_marker"]
+
+        assert editor("POST", "/api/ext/images/check", json={**body, "image_b64": b64(b"not a picture at all")}).json()["status"] == "unreadable"
+        assert editor("POST", "/api/ext/images/check", json={**body, "image_b64": "***"}).status_code == 422
+        assert _auth("bad")("POST", "/api/ext/images/check", json=body).status_code == 401
+
+        set_provider_override(PhotoProvider(verdict="ok", risk="high"))
+        assert editor("POST", "/api/ext/images/check", json=body).json()["verdict"] == "review"                             # a high AI risk never ends as "ok"
+        set_provider_override(RoutingProvider())                                                                             # a provider that cannot see pictures
+        assert "cannot look at pictures" in editor("POST", "/api/ext/images/check", json=body).json()["message"]
+        set_provider_override(None)
+        none = editor("POST", "/api/ext/images/check", json={**body, "image_b64": b64(_picture("png"))}).json()
+        assert none["status"] == "no_ai" and none["verdict"] == "problem" and none["metadata"]["ai_marker"]                  # without AI the file's own marker still shows
+    finally:
+        set_provider_override(None)
+
+
 def test_spacing_and_full_stop_rules_see_the_white_space_the_word_corrector_cannot(api, ctx):
     call = _auth(_token("qc"))
     a1 = "The cashier  greeted me warmly at the door and  said hello."        # two double spaces

@@ -27,6 +27,34 @@ class AnthropicProvider(AIProvider):
         self._key = s.anthropic_api_key
         self._timeout = s.ai_timeout_seconds
 
+    def analyze_image(self, system: str, user: str, image: bytes, media_type: str = "image/jpeg") -> AIResult:
+        import base64
+
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=self._key, timeout=self._timeout)
+        content = [{"type": "image", "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(image).decode()}},
+                   {"type": "text", "text": user}]
+        try:
+            msg = client.messages.create(model=self.model, max_tokens=1800, system=system, messages=[{"role": "user", "content": content}])
+        except anthropic.AuthenticationError as exc:
+            raise AIError("Anthropic rejected the API key (authentication failed). " + _key_shape(self._key)) from exc
+        except anthropic.NotFoundError as exc:
+            raise AIError(f"Anthropic model '{self.model}' was not found.") from exc
+        except anthropic.RateLimitError as exc:
+            raise AIError("Anthropic rate limit reached; retry later.") from exc
+        except anthropic.BadRequestError as exc:
+            raise AIError(f"Anthropic rejected the picture: {exc.message}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise AIError("Could not reach the Anthropic API (network error).") from exc
+        except anthropic.APIStatusError as exc:
+            raise AIError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
+        if msg.stop_reason == "refusal":
+            raise AIError("The model declined to look at this picture (safety refusal).")
+        text = "".join(b.text for b in msg.content if b.type == "text")
+        return AIResult(text=text, model=msg.model or self.model, request_id=getattr(msg, "_request_id", None),
+                        usage={"input_tokens": msg.usage.input_tokens, "output_tokens": msg.usage.output_tokens})
+
     def analyze(self, system: str, user: str) -> AIResult:
         import anthropic
 

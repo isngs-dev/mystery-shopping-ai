@@ -38,6 +38,19 @@ class LoginAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class WebPhotoRule(Base):
+    """A requirement a client's guidelines set for the PICTURES a shopper uploads (what must be visible, quality, faces / plates ...), found by the AI in a
+    guideline file. The extension's picture check holds each photo against these. `scope` page: only forms that link that file; client: every form of the client."""
+    __tablename__ = "web_photo_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    guideline_id: Mapped[int | None] = mapped_column(ForeignKey("web_guidelines.id", ondelete="CASCADE"), nullable=True, index=True)
+    text: Mapped[str] = mapped_column(String(600))
+    scope: Mapped[str] = mapped_column(String(12), default="page")
+    sha16: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class PasswordReset(Base):
     """A one-time code e-mailed to the owner of an account so they can set a new password themselves. Only a keyed hash of the code is stored."""
     __tablename__ = "password_resets"

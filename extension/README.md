@@ -127,6 +127,15 @@ to the top. A word with a capital inside (`iSN`, `eBay`) is treated as a brand, 
 Right after a new version is deployed (or when the host wakes the server up) the platform answers 502 / 503 / 504 for a minute. The extension now tries again by itself (after 4, 8, 15 and 25 seconds,
 saying so in the panel) before it shows an error; the error then says the server is probably restarting and to press **Check again**.
 
+### Pictures: the AI looks at what the shopper uploaded
+Every picture of the page (the thumbnails under questions like "9.2 Please provide pictures for signage") gets a small round badge: grey = not looked at, ✓ fine, ! a person should look, ✕ problem.
+**While you scroll, a picture that comes into view is checked by itself** (two at a time, at most 60 per page load; switch it off in the **Pictures** tab, where **Check all** also works). Press a badge for the findings:
+what the picture shows, whether it is what the question asks for, whether the **client's picture requirements** are met (found by the AI in the client's guideline files, e.g. "every signage photo must show the whole sign"; no
+requirement known yet = it says so), quality problems (blurry, dark, a face or number plate visible), and **visible signs of an AI-generated image**. The file's own data is read too (camera, date taken, GPS, C2PA, a prompt
+left in a PNG, an AI tool named in the metadata); an AI marker in the file forces the result to at least "a person should look". **These are signs, never proof**: websites often strip a file's data when they resize it
+(the card says so) and the AI cannot prove an image is generated, so the verdict is advice for the editor, who decides. `POST /api/ext/images/check`; nothing is stored; pictures go to the AI provider (Anthropic) under the same
+`AI_ALLOW_EXTERNAL` rule as the text. Needs Pillow on the server (in requirements).
+
 ## Screenshots (pictures of pages)
 Text that exists only as a picture is read with OCR on the server (Tesseract is installed in the Docker image used on Render) and the corrected line is
 typeset over a patch of the surrounding colour. Without OCR on the server such a PDF cannot be edited automatically and the panel says that. This part

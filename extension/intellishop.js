@@ -92,6 +92,10 @@
     text-align: center; box-shadow: 0 1px 5px rgba(15,23,42,.35); user-select: none; z-index: 1; }
   .boxbadge:hover { background: #0f8a69; } .boxbadge.ok { background: #fff; color: ${GREEN}; border: 2px solid ${GREEN}; line-height: 22px; }
   .boxbadge .n { position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: #e5484d; color: #fff; font: 700 10px/16px system-ui, Arial, sans-serif; border: 1.5px solid #fff; }
+  .picbadge { position: fixed; pointer-events: auto; cursor: pointer; box-sizing: border-box; width: 28px; height: 28px; border-radius: 50%; background: var(--pc, #64748b); color: #fff;
+    font: 800 15px/24px system-ui, Arial, sans-serif; text-align: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(15,23,42,.45); z-index: 1; user-select: none; }
+  .picbadge.busy { background: #fff; border: 3px solid ${GREEN}; border-right-color: transparent; animation: s .8s linear infinite; }
+  .pop.pic { width: 350px; max-height: 80vh; overflow: auto; }
   .sug.cur { box-shadow: 0 0 0 2px ${GREEN}; } .q.cur { color: #0f8a69; }
   .more { display: none; } .more.open { display: block; }
   .linkbtn { border: 0; background: transparent; color: #0f8a69; font-weight: 600; font-size: 12px; padding: 3px 6px; } .linkbtn:hover { background: #eef7f3; }
@@ -128,7 +132,7 @@
   wrap.append(el('header', {}, el('div', { class: 'logo' }, 'M'), el('div', { class: 'title' }, 'Mystery Shopping AI', subtitle), autoBtn, gear, minBtn), bodyEl, footEl)
   root.append(layer, wrap, badge)
 
-  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false, orig: new Map(), confirm: false, note: null, tab: 'edits', notes: {}, openedOnce: false }
+  const S = { session: null, rows: [], edits: [], info: null, auto: true, seen: new Set(), dismissed: new Set(), busy: false, error: null, checked: false, orig: new Map(), confirm: false, note: null, tab: 'edits', notes: {}, openedOnce: false, pics: new Map(), autoPics: true, picQueue: [], picCount: 0 }
   let tip = null, tipHover = null
 
   function setPanel(openIt) { wrap.classList.toggle('hidden', !openIt); badge.classList.toggle('panel-open', openIt); relayout() }
@@ -469,6 +473,18 @@
       })
       kids.push(b)
     }
+    // a badge on every picture: grey = not looked at yet, ✓ fine, ! a person should look, ✕ problem; press it for the AI's findings
+    for (const p of S.pics.values()) {
+      if (!p.el || !p.el.isConnected) continue
+      const r = p.el.getBoundingClientRect()
+      if (r.bottom < 0 || r.top > innerHeight || r.width < 40) continue
+      const g = picGlyph(p)
+      const busy = p.state === 'busy' || p.state === 'wait'
+      const b = el('div', { class: 'picbadge' + (busy ? ' busy' : ''), title: g[2] + ' — press to see the AI check of this picture' }, busy ? '' : g[0])
+      b.style.cssText = `left:${Math.max(4, r.left + 6)}px;top:${Math.max(4, r.top + 6)}px;--pc:${g[1]}`
+      b.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); showPicCard(p); if (p.state === 'idle') queuePicture(p) })
+      kids.push(b)
+    }
     layer.replaceChildren(...kids)
     trackCard()
   }
@@ -563,10 +579,150 @@
   }
   function trackCard() {
     if (!tip) return
+    if (tip.pic) return placePicCard(tip.pic)
     const e = tip.edit
     if (!S.edits.includes(e) || e.state === 'dismissed' || !e.valid) return hideTip()
     if (!visible(e)) { if (tip.auto) hideTip(); return }
     placeCard(e)
+  }
+
+  // ------------------------------------------------------------------------------------------------ pictures the shopper uploaded
+  // Every picture of the page gets a small badge. While you scroll, a picture that comes into view is sent to the platform: the AI looks at it (is it what the question asks for,
+  // does it meet the client's picture requirements, are there visible signs of an AI-generated image) and the file's own data is read (camera, date, AI markers).
+  const PIC_MAX = 60
+  const VERDICT = { ok: ['✓', '#15a37f', 'Looks fine'], review: ['!', '#d9a400', 'A person should look at it'], problem: ['✕', '#e5484d', 'Problem found'] }
+  const fullSrc = (im) => { const a = im.closest('a'); const h = a && a.href; return h && /\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(h) ? h : (im.currentSrc || im.src) }
+  function picQuestion(im) {
+    const tr = im.closest('tr')
+    const c = tr && tr.cells && tr.cells[0] && !tr.cells[0].contains(im) ? tr.cells[0] : null
+    return ((c ? (c.innerText || c.textContent) : '') || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  }
+  function scanPictures() {
+    for (const [k, p] of S.pics) if (!p.el || !p.el.isConnected) S.pics.delete(k)
+    for (const im of document.querySelectorAll('img')) {
+      if (im.closest('#msai-shop-host') || !im.complete || im.naturalWidth < 80 || im.naturalHeight < 80) continue
+      const r = im.getBoundingClientRect()
+      const src = im.currentSrc || im.src
+      if (!src || r.width < 60 || r.height < 60 || /^data:/.test(src)) continue
+      let p = S.pics.get(src)
+      if (!p) { p = { src, full: fullSrc(im), state: 'idle', result: null, error: null, question: picQuestion(im) }; S.pics.set(src, p) }
+      p.el = im
+    }
+    return [...S.pics.values()]
+  }
+  async function checkPicture(p, force) {
+    if (p.state === 'busy' || (p.state === 'done' && !force)) return
+    p.state = 'busy'; p.error = null
+    if (S.tab === 'pics') renderPanel()
+    try {
+      const r0 = await fetch(p.full, { credentials: 'include' })
+      if (!r0.ok) throw new Error('The website returned ' + r0.status + ' for the picture.')
+      const blob = await r0.blob()
+      if (blob.size > 6_300_000) throw new Error('The picture is larger than 6 MB.')
+      const res = await apiRetry('POST', '/api/ext/images/check', { client_hint: clientHint(), project: projectName(), question: p.question, image_b64: await toB64(blob), guidelines: guidelineShas() })
+      if (res.status === 401) { p.state = 'idle'; return signIn('Please sign in.') }
+      if (!res.ok) throw new Error(res.error || 'The platform did not answer.')
+      p.result = res.data
+      if (res.data.status === 'failed' || res.data.status === 'unreadable') { p.state = 'error'; p.error = res.data.message } else p.state = 'done'
+    } catch (e) { p.state = 'error'; p.error = (e && e.message) || String(e) }
+    if (S.tab === 'pics') renderPanel()
+    if (tip && tip.pic === p) showPicCard(p)
+    relayout()
+  }
+  let picRunning = 0
+  function pumpPictures() {
+    while (picRunning < 2 && S.picQueue.length) {                                       // two at a time: the AI call of a picture takes a few seconds
+      const p = S.picQueue.shift()
+      picRunning++
+      checkPicture(p).finally(() => { picRunning--; pumpPictures() })
+    }
+  }
+  function queuePicture(p) {
+    if (p.state !== 'idle' || S.picQueue.includes(p) || S.picCount >= PIC_MAX) return
+    S.picCount++; S.picQueue.push(p); p.state = 'wait'; pumpPictures()
+  }
+  function autoPictures() {
+    if (!S.autoPics || dead) return
+    for (const p of scanPictures()) {
+      if (p.state !== 'idle') continue
+      const r = p.el.getBoundingClientRect()
+      if (r.bottom > 60 && r.top < innerHeight - 60) queuePicture(p)               // only what is on the screen: scrolling down opens the next ones
+    }
+  }
+  let picT = null
+  const picSoon = () => { clearTimeout(picT); picT = setTimeout(autoPictures, 500) }
+  const picGlyph = (p) => (p.state === 'done' && p.result && VERDICT[p.result.verdict] ? VERDICT[p.result.verdict] : p.state === 'error' ? ['?', '#94a3b8', 'Could not be checked'] : ['M', '#64748b', 'Not checked yet'])
+
+  function picFacts(rs) {
+    const m = rs.metadata || {}
+    const bits = [m.format ? `${m.format} ${m.width}×${m.height}` : null, m.camera ? 'camera: ' + m.camera : null, m.taken ? 'taken: ' + m.taken : null, m.gps ? 'has GPS' : null, m.c2pa ? 'has content-credentials (C2PA) data' : null].filter(Boolean)
+    return [bits.join(' · '), m.ai_marker ? 'AI marker in the file: ' + m.ai_marker : '', ...(m.notes || [])].filter(Boolean)
+  }
+  function showPicCard(p) {
+    hideTip()
+    const rs = p.result
+    const v = rs && VERDICT[rs.verdict]
+    const close = el('button', { class: 'x', title: 'Close' }, '✕')
+    const body = []
+    if (p.state === 'busy' || p.state === 'wait') body.push(el('div', { class: 'small' }, el('span', { class: 'spin' }), 'The AI is looking at this picture …'))
+    else if (p.state === 'error') body.push(el('div', { class: 'errtext' }, p.error || 'The picture could not be checked.'))
+    else if (rs) {
+      body.push(el('div', { class: 'change', style: `color:${v ? v[1] : '#475569'}` }, `${v ? v[0] : ''} ${v ? v[2] : 'Checked'}`), el('div', { class: 'reason' }, rs.summary || ''))
+      if (rs.message) body.push(el('div', { class: 'small errtext' }, rs.message))
+      if (rs.shows) body.push(el('div', { class: 'small' }, el('b', {}, 'Shows: '), rs.shows))
+      if (rs.matches_question) body.push(el('div', { class: 'small' }, el('b', {}, 'What the question asks for: '), ({ yes: '✓ yes', no: '✗ no', unclear: '? unclear' })[rs.matches_question] || rs.matches_question, rs.match_note ? ' — ' + rs.match_note : ''))
+      if ((rs.requirements || []).length) body.push(el('div', { class: 'small', style: 'margin-top:4px' }, el('b', {}, 'Client’s picture requirements'),
+        ...rs.requirements.map((r) => el('div', {}, ({ yes: '✓ ', no: '✗ ', unclear: '? ' })[r.met] || '', r.rule, r.note ? ' — ' + r.note : ''))))
+      else if (!rs.requirements_given) body.push(el('div', { class: 'small muted', style: 'margin-top:4px' }, 'No picture requirement is known for this client yet (they come from its guidelines; upload them in the Rules tab).'))
+      if ((rs.quality || []).length) body.push(el('div', { class: 'small', style: 'margin-top:4px' }, el('b', {}, 'Quality: '), rs.quality.join('; ')))
+      const ai = rs.ai_generated || {}
+      body.push(el('div', { class: 'small', style: 'margin-top:4px' }, el('b', {}, 'Looks AI-generated? '), (ai.risk || 'unknown').toUpperCase(), (ai.signs || []).length ? ': ' + ai.signs.join('; ') : '',
+        el('div', { class: 'muted' }, ai.note || 'Visible signs only; a person decides.')))
+      const facts = picFacts(rs)
+      if (facts.length) body.push(el('div', { class: 'small muted', style: 'margin-top:4px' }, el('b', {}, 'File: '), facts.join(' · ')))
+    }
+    const again = el('button', {}, 'Check again'); again.addEventListener('click', () => { p.state = 'idle'; p.result = null; checkPicture(p, true); showPicCard(p) })
+    const open = el('button', {}, 'Open picture'); open.addEventListener('click', () => window.open(p.full, '_blank', 'noopener'))
+    const pop = el('div', { class: 'pop pic' }, el('div', { class: 'top' }, el('span', { class: 'chip ai' }, 'Picture check'), el('span', { class: 'cat' }, (p.question || 'Picture').slice(0, 48)), close), ...body,
+      el('div', { class: 'acts' }, again, open), noteField({ qid: 'pic', original: 'Picture: ' + (p.question || p.src).slice(0, 80), replacement: rs ? rs.verdict : 'unchecked', state: 'open', applied: false }))
+    close.addEventListener('click', () => hideTip())
+    pop.addEventListener('mouseenter', () => { tipHover = true })
+    pop.addEventListener('mouseleave', () => { tipHover = false })
+    pop.pic = p; pop.auto = true
+    tip = pop
+    root.append(pop)
+    placePicCard(p)
+  }
+  function placePicCard(p) {
+    if (!tip || !p.el || !p.el.isConnected) return hideTip()
+    const r = p.el.getBoundingClientRect()
+    if (r.bottom < 40 || r.top > innerHeight - 40) return hideTip()
+    const w = 350, h = tip.offsetHeight
+    const limit = innerWidth - (wrap.classList.contains('hidden') ? 0 : 380) - 12
+    tip.style.left = Math.max(8, Math.min(limit - w, r.right + 10 > limit - w ? r.left : r.right + 10)) + 'px'
+    tip.style.top = Math.max(8, Math.min(innerHeight - h - 8, r.top)) + 'px'
+  }
+  function picturesTab() {
+    const ps = scanPictures()
+    const count = (k) => ps.filter((p) => p.state === 'done' && p.result && p.result.verdict === k).length
+    const auto = el('input', { type: 'checkbox' }); auto.checked = S.autoPics
+    auto.addEventListener('change', () => { S.autoPics = auto.checked; if (S.autoPics) autoPictures() })
+    const all = el('button', { class: 'primary' }, `Check all ${ps.length} pictures`)
+    all.addEventListener('click', () => { for (const p of ps) queuePicture(p); renderPanel() })
+    const rows = ps.map((p) => {
+      const g = picGlyph(p)
+      const row = el('div', { class: 'sug', style: `border-left-color:${g[1]}` },
+        el('div', { style: 'display:flex;gap:8px;align-items:center' }, el('img', { src: p.src, style: 'width:46px;height:46px;object-fit:cover;border-radius:6px;flex:none' }),
+          el('div', { style: 'flex:1;min-width:0' }, el('div', { class: 'small' }, el('b', {}, (p.state === 'wait' || p.state === 'busy' ? '… ' : g[0] + ' ') + (p.state === 'wait' || p.state === 'busy' ? 'checking' : g[2]))),
+            el('div', { class: 'small muted' }, (p.question || 'Picture').slice(0, 90)),
+            p.result && p.result.summary ? el('div', { class: 'small' }, p.result.summary) : null, p.error ? el('div', { class: 'small errtext' }, p.error) : null)))
+      row.addEventListener('click', () => { p.el.scrollIntoView({ block: 'center', behavior: 'instant' }); setTimeout(() => { relayout(); showPicCard(p); if (p.state === 'idle') queuePicture(p) }, 150) })
+      return row
+    })
+    return [card('info', el('h3', {}, 'Pictures'), el('div', { class: 'small' }, 'The pictures the shopper uploaded. The AI checks each one against the question and the client’s picture requirements, and looks for visible signs of an AI-generated image. These are signs, never proof: a person decides.'),
+        el('div', { class: 'small', style: 'margin-top:6px' }, `${ps.length} picture${ps.length === 1 ? '' : 's'} · ✓ ${count('ok')} · ! ${count('review')} · ✕ ${count('problem')}`),
+        el('label', { style: 'font-weight:400;margin:6px 0 0' }, auto, ' Check pictures automatically as I scroll to them'), el('div', { class: 'acts' }, all)),
+      ...(rows.length ? rows : [el('div', { class: 'small muted' }, 'No picture was found on this page.')])]
   }
 
   /** "Ask AI": only that answer is sent again, with the person's comment; its new edits replace the open ones of that box. */
@@ -616,10 +772,11 @@
     }
     if (best) { S.seen.add(best.id); showCard(best, true) }
   }
-  addEventListener('scroll', () => { relayout(); autoSoon(); syncSoon() }, true)
+  addEventListener('scroll', () => { relayout(); autoSoon(); syncSoon(); picSoon() }, true)
   addEventListener('resize', relayout)
   addEventListener('input', (ev) => { if (ev.target && ev.target.name && /^Q\[/.test(ev.target.name)) relayout() }, true)
   every(relayout, 400)
+  every(() => { if (S.session) { const n = S.pics.size; scanPictures(); picSoon(); if (S.pics.size !== n) renderPanel() } }, 3000)        // pictures load late: look again from time to time
 
   // ------------------------------------------------------------------------------------------------ the side panel
   function focusEdit(e) {
@@ -856,7 +1013,12 @@
     const parts = []
     const nOpen = S.edits.filter((e) => e.state === 'open').length
     const tabBtn = (id, label) => { const b = el('button', { class: S.tab === id ? 'on' : '' }, label); b.addEventListener('click', () => { S.tab = id; hideTip(); renderPanel() }); return b }
-    const tabs = el('div', { class: 'tabs' }, tabBtn('edits', `Edits (${nOpen})`), tabBtn('rules', 'Rules & guidelines'))
+    const nPics = scanPictures().length
+    const tabs = el('div', { class: 'tabs' }, tabBtn('edits', `Edits (${nOpen})`), tabBtn('rules', 'Rules'), tabBtn('pics', `Pictures (${nPics})`))
+    if (S.tab === 'pics') {
+      set(bodyEl, tabs, noteCard(), ...picturesTab())
+      return renderFoot()
+    }
     if (S.error) parts.push(card('err', el('b', {}, 'Could not check this page. '), S.error))
     if (i && S.tab === 'rules') {
       set(bodyEl, tabs, noteCard(), ...rulesTab(i))

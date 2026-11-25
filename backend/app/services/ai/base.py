@@ -23,3 +23,7 @@ class AIProvider(ABC):
 
     @abstractmethod
     def analyze(self, system: str, user: str) -> AIResult: ...
+
+    def analyze_image(self, system: str, user: str, image: bytes, media_type: str = "image/jpeg") -> AIResult:
+        """The model looks at one picture and answers `user`. Providers that cannot see pictures say so."""
+        raise AIError(f"The AI provider “{self.name}” cannot look at pictures. Use the Anthropic provider for picture checks.")

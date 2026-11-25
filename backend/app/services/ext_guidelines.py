@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from ..audit import audit
 from ..db import utcnow
 from ..enums import RuleStatus
-from ..models import Client, QCRule, RuleVersion, User, WebGuideline
+from ..models import Client, QCRule, RuleVersion, User, WebGuideline, WebPhotoRule
 from . import error_taxonomy as tx, rules_service
 from .ai import AIError, resolve_provider
 from .ext_assist import GRAMMAR
@@ -42,8 +42,10 @@ terms, past tense, punctuation and quotation style, spacing, words or topics tha
 associates, paragraph form, abbreviations. Do NOT output rules about what the shopper must do or observe on the visit, scoring, deadlines, payment or logistics.
 Each rule must be short, concrete and checkable. Prefer fewer, precise rules (at most {MAX_RULES} per part). Use the document's own wording for examples.
 "type" is one of: {", ".join(sorted(GRAMMAR))}.
-Return ONLY this JSON: {{"rules":[{{"name":"short title","description":"the rule in one or two sentences","type":"spelling","examples":"optional: wrong -> right"}}]}}
-If the document has no editing rules return {{"rules":[]}}."""
+Also collect "photo_requirements": what the client demands of the PICTURES / photos / screenshots / receipts the shopper uploads (what must be visible or shown, how clear
+they must be, privacy such as faces / number plates / staff, date or time stamps, which pictures are required for which question). One short sentence each, at most 10.
+Return ONLY this JSON: {{"rules":[{{"name":"short title","description":"the rule in one or two sentences","type":"spelling","examples":"optional: wrong -> right"}}],"photo_requirements":["..."]}}
+If the document has no editing rules return {{"rules":[]}}; if it says nothing about pictures return "photo_requirements":[]."""
 
 
 def _text_of(content: bytes, filename: str | None = None) -> str:
@@ -145,22 +147,25 @@ def note(db: Session, user: User, *, client_hint: str | None, project: str | Non
     return {"saved": True}
 
 
-def _ai_rules(provider, client: str, project: str | None, text: str, cap: int) -> list[dict]:
-    """The AI reads the text in pieces (long checklists) and returns the merged, de-duplicated rule list. The first piece must work; later failures keep what was found."""
+def _ai_rules(provider, client: str, project: str | None, text: str, cap: int) -> tuple[list[dict], list[str]]:
+    """The AI reads the text in pieces (long checklists) and returns the merged, de-duplicated rule list and the picture requirements. The first piece must work;
+    later failures keep what was found."""
     from concurrent.futures import ThreadPoolExecutor
 
     pieces = [text[i:i + CHUNK] for i in range(0, min(len(text), CHUNK * MAX_CHUNKS), CHUNK)]
     out: list[dict] = []
     seen: set[str] = set()
+    photos: list[str] = []
 
     def read(n: int):
         prompt = f"<client_brief client=\"{client}\" project=\"{project or ''}\" part=\"{n + 1}/{len(pieces)}\">\n{_TAGS.sub('< ', pieces[n])}\n</client_brief>\nReturn the JSON."
         res = provider.analyze(LEARN_SYSTEM, prompt)
         m = re.search(r"\{.*\}", res.text, re.S)
-        items = json.loads(m.group(0))["rules"] if m else None
+        data = json.loads(m.group(0)) if m else None
+        items = data["rules"] if isinstance(data, dict) else None
         if not isinstance(items, list):
             raise ValueError("no rule list")
-        return items
+        return {"rules": items, "photos": data.get("photo_requirements") if isinstance(data.get("photo_requirements"), list) else []}
 
     with ThreadPoolExecutor(max_workers=min(4, len(pieces))) as pool:       # the pieces are read at the same time: a long checklist takes about as long as a short one
         futures = [pool.submit(read, n) for n in range(len(pieces))]
@@ -171,16 +176,20 @@ def _ai_rules(provider, client: str, project: str | None, text: str, cap: int) -
             except Exception:  # noqa: BLE001
                 if n == 0:
                     raise
-                results.append([])
-    for items in results:
-        for it in items:
+                results.append({"rules": [], "photos": []})
+    for res in results:
+        for it in res["rules"]:
             if not isinstance(it, dict):
                 continue
             nm = _clip(it.get("name"), 160).lower()
             if nm and nm not in seen and len(out) < cap:
                 seen.add(nm)
                 out.append(it)
-    return out
+        for ph in res["photos"]:
+            t = _clip(ph, 500)
+            if len(t) >= 8 and t.lower() not in {p.lower() for p in photos} and len(photos) < 15:
+                photos.append(t)
+    return out, photos
 
 
 def _rule_config(sha: str, scope: str, project: str | None) -> dict:
@@ -246,7 +255,7 @@ def learn(db: Session, user: User, *, client_hint: str | None, project: str | No
     if provider is None:
         return {**base, "status": "no_ai", "message": "AI model not used: " + why}
     try:
-        items = _ai_rules(provider, company["client"], project, text, cap=MAX_RULES if scope == "page" else MAX_RULES_UPLOAD)
+        items, photos = _ai_rules(provider, company["client"], project, text, cap=MAX_RULES if scope == "page" else MAX_RULES_UPLOAD)
     except AIError as exc:
         return {**base, "status": "failed", "message": f"AI model failed ({exc})."}
     except Exception as exc:  # noqa: BLE001
@@ -273,10 +282,13 @@ def learn(db: Session, user: User, *, client_hint: str | None, project: str | No
         keys.append(key)
         made.append({"name": name, "type": tx.label(sub), "description": desc})
     row = WebGuideline(client_id=cid, sha256=sha, filename=_clip(filename, 200), source_url=source_url, projects=[project] if project else [],
-                       text_chars=len(text), text=text, rule_keys=keys, status="learned" if keys else "no_rules", learned_by=user.id)
+                       text_chars=len(text), text=text, rule_keys=keys, status="learned" if (keys or photos) else "no_rules", learned_by=user.id)
     db.add(row)
+    db.flush()
+    for ph in photos:                                                       # what the client demands of the pictures: the picture check holds each photo against these
+        db.add(WebPhotoRule(client_id=cid, guideline_id=row.id, text=ph, scope="page" if scope == "page" else "client", sha16=sha[:16]))
     db.commit()
-    return {**base, "status": "learned" if keys else "no_rules", "new_project": bool(project), "rules": len(keys), "learned": made, "file_id": row.id}
+    return {**base, "status": "learned" if (keys or photos) else "no_rules", "new_project": bool(project), "rules": len(keys), "photo_rules": len(photos), "learned": made, "file_id": row.id}
 
 
 # ----------------------------------------------------------------------------------------------------- uploads made by people (the Rules tab)
@@ -338,6 +350,8 @@ def remove_file(db: Session, user: User, file_id: int, *, can_manage: bool) -> d
         rv.status = RuleStatus.RETIRED.value
         rv.change_note = ((rv.change_note or "") + f" · Retired: the file was removed by {user.name}.").strip(" ·")
         n += 1
+    for pr in db.execute(select(WebPhotoRule).where(WebPhotoRule.guideline_id == row.id)).scalars():
+        db.delete(pr)
     audit(db, user, "web_guideline.removed", entity_type="web_guideline", entity_id=row.id, detail={"filename": row.filename, "rules_retired": n})
     db.delete(row)
     db.commit()
